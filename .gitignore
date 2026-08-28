@@ -1,3 +1,6 @@
+# Reference codebase (local read-only only, not tracked in repo)
+project-bolt-sb1-xmioodwi/
+
 # Node dependencies
 node_modules/
 **/node_modules/
