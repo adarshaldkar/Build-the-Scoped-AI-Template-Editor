@@ -8,6 +8,7 @@ import type {
   ElementNode,
   Viewport,
   ValidationError,
+  ElementStyleProps,
 } from "./types";
 
 /**
@@ -251,19 +252,34 @@ export function applyEditCommand(
         // Style property changes according to scope
         if (targetStyleProps && Object.keys(targetStyleProps).length > 0) {
           if (command.scope === "all") {
-            updatedNode.baseProps = {
-              ...updatedNode.baseProps,
-              ...targetStyleProps,
-            };
+            const nextBase: ElementStyleProps = { ...updatedNode.baseProps };
+            for (const [k, v] of Object.entries(targetStyleProps)) {
+              if (v === undefined || v === null) {
+                delete (nextBase as Record<string, unknown>)[k];
+              } else {
+                (nextBase as Record<string, unknown>)[k] = v;
+              }
+            }
+            updatedNode.baseProps = nextBase;
           } else {
             const vp = command.scope as Viewport;
-            updatedNode.overrides = {
-              ...updatedNode.overrides,
-              [vp]: {
-                ...(updatedNode.overrides[vp] || {}),
-                ...targetStyleProps,
-              },
-            };
+            const currentOverride = { ...(updatedNode.overrides[vp] || {}) };
+
+            for (const [k, v] of Object.entries(targetStyleProps)) {
+              if (v === undefined || v === null) {
+                delete (currentOverride as Record<string, unknown>)[k];
+              } else {
+                (currentOverride as Record<string, unknown>)[k] = v;
+              }
+            }
+
+            const updatedOverrides = { ...updatedNode.overrides };
+            if (Object.keys(currentOverride).length > 0) {
+              updatedOverrides[vp] = currentOverride;
+            } else {
+              delete updatedOverrides[vp];
+            }
+            updatedNode.overrides = updatedOverrides;
           }
         }
 
