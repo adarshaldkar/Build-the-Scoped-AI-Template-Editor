@@ -114,7 +114,7 @@ export function validateEditCommand(
   }
 
   // 6. Target Existence (Atomicity Guard: All targets must exist)
-  const existingNodeIds = getAllNodeIds(model.elements);
+  const existingNodeIds = getAllNodeIds(model.elements, model.templateId);
 
   for (const targetId of command.targetIds) {
     if (!existingNodeIds.has(targetId)) {
@@ -131,7 +131,9 @@ export function validateEditCommand(
 
   // 7. Element Property Applicability Check
   for (const targetId of command.targetIds) {
-    const node = findNodeById(model.elements, targetId)!;
+    if (targetId === model.templateId) continue;
+    const node = findNodeById(model.elements, targetId);
+    if (!node) continue;
     const targetStyleProps = command.changes.patches?.[targetId]?.styleProps ?? command.changes.styleProps;
     if (targetStyleProps) {
       const applicabilityError = validatePropertyApplicability(node.kind, targetStyleProps);
@@ -147,18 +149,24 @@ export function validateEditCommand(
   // 8. Reorder Bounds Check
   if (hasReorder && command.changes.reorder) {
     const { parentId, sourceIndex, targetIndex } = command.changes.reorder;
-    const parentNode = findNodeById(model.elements, parentId);
-    if (!parentNode || !parentNode.children || parentNode.children.length === 0) {
-      return {
-        valid: false,
-        error: {
-          code: "INVALID_REORDER",
-          message: `Reorder parent container "${parentId}" does not exist or has no children.`,
-        },
-      };
+    let count = 0;
+
+    if (parentId === model.templateId) {
+      count = model.elements.length;
+    } else {
+      const parentNode = findNodeById(model.elements, parentId);
+      if (!parentNode || !parentNode.children || parentNode.children.length === 0) {
+        return {
+          valid: false,
+          error: {
+            code: "INVALID_REORDER",
+            message: `Reorder parent container "${parentId}" does not exist or has no children.`,
+          },
+        };
+      }
+      count = parentNode.children.length;
     }
 
-    const count = parentNode.children.length;
     if (sourceIndex < 0 || sourceIndex >= count || targetIndex < 0 || targetIndex >= count) {
       return {
         valid: false,
@@ -206,7 +214,9 @@ export function applyEditCommand(
   // 1. Handle Content and Style Property Modifications on Targets
   if (hasGlobalContent || hasGlobalStyleProps || hasPatches) {
     for (const targetId of command.targetIds) {
-      const existingNode = findNodeById(model.elements, targetId)!;
+      if (targetId === model.templateId) continue;
+      const existingNode = findNodeById(model.elements, targetId);
+      if (!existingNode) continue;
 
       const targetPatch = command.changes.patches?.[targetId];
       const targetContent = targetPatch?.content !== undefined ? targetPatch.content : command.changes.content;
@@ -299,9 +309,9 @@ export function applyEditCommand(
   // 2. Handle Structural Reordering if requested
   if (command.changes.reorder) {
     const { parentId, sourceIndex, targetIndex } = command.changes.reorder;
-    const parentBefore = findNodeById(nextElements, parentId)!;
+    const parentName = parentId === model.templateId ? model.templateName : findNodeById(nextElements, parentId)?.name || parentId;
 
-    nextElements = reorderChildren(nextElements, parentId, sourceIndex, targetIndex);
+    nextElements = reorderChildren(nextElements, parentId, sourceIndex, targetIndex, model.templateId);
 
     historyEntries.push({
       revisionId: `rev_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${parentId}`,
@@ -315,7 +325,7 @@ export function applyEditCommand(
           : "manual",
       source: command.source,
       elementId: parentId,
-      elementName: parentBefore.name,
+      elementName: parentName,
       scope: command.scope,
       propertyKey: "structure",
       beforeState: {},

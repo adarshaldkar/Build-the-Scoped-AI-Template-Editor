@@ -36,8 +36,11 @@ export function findParentNode(
 /**
  * Collects all stable element IDs from a node tree.
  */
-export function getAllNodeIds(nodes: ElementNode[]): Set<string> {
+export function getAllNodeIds(nodes: ElementNode[], templateId?: string): Set<string> {
   const ids = new Set<string>();
+  if (templateId) {
+    ids.add(templateId);
+  }
 
   function traverse(list: ElementNode[]) {
     for (const item of list) {
@@ -75,14 +78,32 @@ export function mapNodeTree(
 }
 
 /**
- * Pure immutable sibling reordering inside a parent container.
+ * Pure immutable sibling reordering inside a parent container (or top-level template sections).
  */
 export function reorderChildren(
   nodes: ElementNode[],
   parentId: string,
   sourceIndex: number,
-  targetIndex: number
+  targetIndex: number,
+  templateId?: string
 ): ElementNode[] {
+  // Case 1: Reordering top-level sections in the root template
+  if (templateId && parentId === templateId) {
+    const copy = [...nodes];
+    if (
+      sourceIndex < 0 ||
+      sourceIndex >= copy.length ||
+      targetIndex < 0 ||
+      targetIndex >= copy.length
+    ) {
+      return nodes;
+    }
+    const [moved] = copy.splice(sourceIndex, 1);
+    copy.splice(targetIndex, 0, moved);
+    return copy;
+  }
+
+  // Case 2: Reordering children inside a nested container ElementNode
   return nodes.map((node) => {
     if (node.id === parentId && node.children) {
       const copy = [...node.children];
@@ -105,7 +126,7 @@ export function reorderChildren(
     if (node.children && node.children.length > 0) {
       return {
         ...node,
-        children: reorderChildren(node.children, parentId, sourceIndex, targetIndex),
+        children: reorderChildren(node.children, parentId, sourceIndex, targetIndex, templateId),
       };
     }
     return node;
