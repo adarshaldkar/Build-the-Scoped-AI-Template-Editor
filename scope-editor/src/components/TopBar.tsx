@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { Viewport } from "../lib/types";
 import {
   IconCode,
@@ -11,6 +11,7 @@ import {
   IconUndo,
   IconLayers,
   IconSliders,
+  IconCheck,
 } from "./icons";
 
 interface Props {
@@ -26,10 +27,10 @@ interface Props {
   onToggleHistory: () => void;
   onReset: () => void;
   saved: boolean;
-  layersOpen?: boolean;
-  onToggleLayers?: () => void;
-  inspectorOpen?: boolean;
-  onToggleInspector?: () => void;
+  layersOpen: boolean;
+  onToggleLayers: () => void;
+  inspectorOpen: boolean;
+  onToggleInspector: () => void;
 }
 
 export const TopBar: React.FC<Props> = ({
@@ -49,142 +50,338 @@ export const TopBar: React.FC<Props> = ({
   onToggleLayers,
   inspectorOpen,
   onToggleInspector,
-}) => (
-  <header className="h-12 shrink-0 bg-[#fbfbfa] border-b border-zinc-200 text-zinc-900 flex items-center justify-between px-3 gap-2 overflow-x-auto custom-scrollbar select-none">
-    {/* Left Section: Brand & Sidebar Toggles */}
-    <div className="flex items-center gap-2 shrink-0">
-      {/* Mobile/Tablet Layers Toggle */}
-      {onToggleLayers && (
+}) => {
+  const [activeMenu, setActiveMenu] = useState<"file" | "edit" | "view" | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setActiveMenu(null);
+      }
+    };
+    if (activeMenu) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [activeMenu]);
+
+  return (
+    <header className="h-12 shrink-0 bg-[#fbfbfa] border-b border-zinc-200 text-zinc-900 flex items-center justify-between px-3 gap-2 select-none relative z-40">
+      {/* Left Section: Brand, Layers Toggle & File/Edit/View Menus */}
+      <div className="flex items-center gap-2" ref={menuRef}>
+        {/* Toggle Layers Sidebar Button */}
         <button
           type="button"
           onClick={onToggleLayers}
-          title="Toggle Layers panel"
-          className={`lg:hidden p-1.5 rounded-md border transition-colors ${
+          title={layersOpen ? "Hide Layers Panel" : "Show Layers Panel"}
+          className={`p-1.5 rounded-md border transition-all ${
             layersOpen
-              ? "bg-zinc-800 text-white border-zinc-800"
-              : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"
+              ? "bg-zinc-900 text-white border-zinc-900 shadow-sm"
+              : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-100"
           }`}
         >
           <IconLayers size={14} />
         </button>
-      )}
 
-      {/* Brand logo & title */}
-      <div className="flex items-center gap-2">
-        <div className="w-6 h-6 rounded-md bg-zinc-900 text-white flex items-center justify-center text-[10px] font-bold shadow-sm">
-          S
+        {/* Brand Title */}
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-md bg-zinc-900 text-white flex items-center justify-center text-[10px] font-bold shadow-sm">
+            S
+          </div>
+          <span className="text-sm font-semibold tracking-tight">Scope</span>
+          <span className="text-zinc-300 hidden sm:inline">/</span>
+          <span className="text-xs text-zinc-500 hidden sm:inline font-medium">NOVA Studio</span>
         </div>
-        <span className="text-sm font-semibold tracking-tight">Scope</span>
-        <span className="text-zinc-300 hidden sm:inline">/</span>
-        <span className="text-xs text-zinc-500 hidden sm:inline font-medium">NOVA Studio</span>
-      </div>
 
-      {/* Menu items on wider screens */}
-      <nav className="hidden xl:flex items-center gap-0.5 text-xs text-zinc-500 ml-2">
-        <button className="px-2 py-1 rounded hover:bg-zinc-100 transition-colors">File</button>
-        <button className="px-2 py-1 rounded hover:bg-zinc-100 transition-colors">Edit</button>
-        <button className="px-2 py-1 rounded hover:bg-zinc-100 transition-colors">View</button>
-      </nav>
-    </div>
-
-    {/* Center Section: Viewport Switcher */}
-    <div className="flex items-center justify-center shrink-0">
-      <div className="inline-flex rounded-lg border border-zinc-200/80 bg-zinc-100/60 p-0.5 shadow-inner">
-        {(["desktop", "tablet", "mobile"] as Viewport[]).map((v) => {
-          const I = v === "desktop" ? IconDesktop : v === "tablet" ? IconTablet : IconMobile;
-          const isActive = activeViewport === v;
-          return (
+        {/* Studio Menus: File, Edit, View */}
+        <nav className="flex items-center gap-0.5 text-xs text-zinc-600 ml-1 sm:ml-2 relative">
+          {/* File Menu */}
+          <div className="relative">
             <button
-              key={v}
               type="button"
-              onClick={() => onViewportChange(v)}
-              className={`flex items-center gap-1.5 px-2.5 h-7 rounded-md text-[11px] font-medium transition-all ${
-                isActive
-                  ? "bg-white text-zinc-900 shadow-sm border border-zinc-200/50 font-semibold"
-                  : "text-zinc-500 hover:text-zinc-800 hover:bg-white/50"
+              onClick={() => setActiveMenu(activeMenu === "file" ? null : "file")}
+              className={`px-2.5 py-1 rounded-md transition-colors ${
+                activeMenu === "file"
+                  ? "bg-zinc-200 text-zinc-900 font-semibold"
+                  : "hover:bg-zinc-100 text-zinc-600"
               }`}
             >
-              <I size={13} />
-              <span className="hidden sm:inline">{v[0].toUpperCase() + v.slice(1)}</span>
+              File
             </button>
-          );
-        })}
+            {activeMenu === "file" && (
+              <div className="absolute top-full left-0 mt-1.5 w-52 bg-white rounded-lg border border-zinc-200 shadow-xl py-1 z-50 text-xs text-zinc-700 animate-fade-in">
+                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 border-b border-zinc-100">
+                  Document Actions
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onToggleCodeEditor();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between"
+                >
+                  <span>Export HTML Code...</span>
+                  <span className="text-[10px] text-zinc-400 font-mono">⌘K</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onToggleHistory();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between"
+                >
+                  <span>Audit History...</span>
+                </button>
+                <div className="my-1 border-t border-zinc-100"></div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onReset();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-rose-50 text-rose-600 font-medium"
+                >
+                  Reset Template...
+                </button>
+                <div className="my-1 border-t border-zinc-100"></div>
+                <div className="px-3 py-1 text-[10px] text-zinc-400">
+                  Revision {revision} · {saved ? "Auto-saved" : "Modified"}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Edit Menu */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setActiveMenu(activeMenu === "edit" ? null : "edit")}
+              className={`px-2.5 py-1 rounded-md transition-colors ${
+                activeMenu === "edit"
+                  ? "bg-zinc-200 text-zinc-900 font-semibold"
+                  : "hover:bg-zinc-100 text-zinc-600"
+              }`}
+            >
+              Edit
+            </button>
+            {activeMenu === "edit" && (
+              <div className="absolute top-full left-0 mt-1.5 w-52 bg-white rounded-lg border border-zinc-200 shadow-xl py-1 z-50 text-xs text-zinc-700 animate-fade-in">
+                <button
+                  type="button"
+                  disabled={!canUndo}
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onUndo();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between disabled:opacity-40 disabled:hover:bg-white"
+                >
+                  <span>Undo</span>
+                  <span className="text-[10px] text-zinc-400 font-mono">⌘Z</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!canRedo}
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onRedo();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between disabled:opacity-40 disabled:hover:bg-white"
+                >
+                  <span>Redo</span>
+                  <span className="text-[10px] text-zinc-400 font-mono">⌘⇧Z</span>
+                </button>
+                <div className="my-1 border-t border-zinc-100"></div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onToggleAssistant();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between"
+                >
+                  <span>AI Assistant...</span>
+                  <span className="text-[10px] text-zinc-400 font-mono">⌘/</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onToggleCodeEditor();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between"
+                >
+                  <span>HTML Code Editor...</span>
+                  <span className="text-[10px] text-zinc-400 font-mono">⌘K</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* View Menu */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setActiveMenu(activeMenu === "view" ? null : "view")}
+              className={`px-2.5 py-1 rounded-md transition-colors ${
+                activeMenu === "view"
+                  ? "bg-zinc-200 text-zinc-900 font-semibold"
+                  : "hover:bg-zinc-100 text-zinc-600"
+              }`}
+            >
+              View
+            </button>
+            {activeMenu === "view" && (
+              <div className="absolute top-full left-0 mt-1.5 w-56 bg-white rounded-lg border border-zinc-200 shadow-xl py-1 z-50 text-xs text-zinc-700 animate-fade-in">
+                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 border-b border-zinc-100">
+                  Viewport Mode
+                </div>
+                {(["desktop", "tablet", "mobile"] as Viewport[]).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => {
+                      setActiveMenu(null);
+                      onViewportChange(v);
+                    }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between"
+                  >
+                    <span>{v === "desktop" ? "Desktop (1440px)" : v === "tablet" ? "Tablet (768px)" : "Mobile (375px)"}</span>
+                    {activeViewport === v && <IconCheck size={13} className="text-blue-600" />}
+                  </button>
+                ))}
+                <div className="my-1 border-t border-zinc-100"></div>
+                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 border-b border-zinc-100">
+                  Panels & Drawers
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onToggleLayers();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between"
+                >
+                  <span>Layers Panel</span>
+                  {layersOpen && <IconCheck size={13} className="text-blue-600" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMenu(null);
+                    onToggleInspector();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 flex items-center justify-between"
+                >
+                  <span>Property Inspector</span>
+                  {inspectorOpen && <IconCheck size={13} className="text-blue-600" />}
+                </button>
+              </div>
+            )}
+          </div>
+        </nav>
       </div>
-    </div>
 
-    {/* Right Section: Revision Status, Tools & Actions */}
-    <div className="flex items-center gap-1 shrink-0">
-      <span className="hidden md:inline-block text-[10px] font-mono text-zinc-400 mr-2 bg-zinc-100/70 border border-zinc-200/60 px-2 py-0.5 rounded-full">
-        Rev {revision} · {saved ? "Saved" : "Unsaved"}
-      </span>
+      {/* Center Section: Viewport Switcher */}
+      <div className="flex items-center justify-center shrink-0">
+        <div className="inline-flex rounded-lg border border-zinc-200/80 bg-zinc-100/60 p-0.5 shadow-inner">
+          {(["desktop", "tablet", "mobile"] as Viewport[]).map((v) => {
+            const I = v === "desktop" ? IconDesktop : v === "tablet" ? IconTablet : IconMobile;
+            const isActive = activeViewport === v;
+            return (
+              <button
+                key={v}
+                type="button"
+                onClick={() => onViewportChange(v)}
+                className={`flex items-center gap-1.5 px-2.5 h-7 rounded-md text-[11px] font-medium transition-all ${
+                  isActive
+                    ? "bg-white text-zinc-900 shadow-sm border border-zinc-200/50 font-semibold"
+                    : "text-zinc-500 hover:text-zinc-800 hover:bg-white/50"
+                }`}
+              >
+                <I size={13} />
+                <span className="hidden sm:inline">{v[0].toUpperCase() + v.slice(1)}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-      <button
-        title="Undo (⌘Z)"
-        disabled={!canUndo}
-        onClick={onUndo}
-        className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 disabled:opacity-25 transition-colors"
-      >
-        <IconUndo size={14} />
-      </button>
+      {/* Right Section: Tools, History, Inspector Toggle */}
+      <div className="flex items-center gap-1 shrink-0">
+        <span className="hidden md:inline-block text-[10px] font-mono text-zinc-400 mr-2 bg-zinc-100/70 border border-zinc-200/60 px-2 py-0.5 rounded-full">
+          Rev {revision} · {saved ? "Saved" : "Unsaved"}
+        </span>
 
-      <button
-        title="Redo (⌘⇧Z)"
-        disabled={!canRedo}
-        onClick={onRedo}
-        className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 disabled:opacity-25 transition-colors"
-      >
-        <IconRedo size={14} />
-      </button>
+        <button
+          title="Undo (⌘Z)"
+          disabled={!canUndo}
+          onClick={onUndo}
+          className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 disabled:opacity-25 transition-colors"
+        >
+          <IconUndo size={14} />
+        </button>
 
-      <div className="w-[1px] h-4 bg-zinc-200 mx-0.5"></div>
+        <button
+          title="Redo (⌘⇧Z)"
+          disabled={!canRedo}
+          onClick={onRedo}
+          className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 disabled:opacity-25 transition-colors"
+        >
+          <IconRedo size={14} />
+        </button>
 
-      <button
-        title="Open HTML Code Editor (⌘K)"
-        onClick={onToggleCodeEditor}
-        className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 transition-colors"
-      >
-        <IconCode size={14} />
-      </button>
+        <div className="w-[1px] h-4 bg-zinc-200 mx-0.5"></div>
 
-      <button
-        title="Open AI Assistant (⌘/)"
-        onClick={onToggleAssistant}
-        className="flex items-center gap-1 px-2.5 h-7 rounded-md border border-zinc-200/80 bg-white text-xs font-medium text-zinc-700 hover:bg-zinc-50 shadow-sm transition-colors"
-      >
-        <span>Assistant</span>
-      </button>
+        <button
+          title="Open HTML Code Editor (⌘K)"
+          onClick={onToggleCodeEditor}
+          className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 transition-colors"
+        >
+          <IconCode size={14} />
+        </button>
 
-      <button
-        title="Audit History"
-        onClick={onToggleHistory}
-        className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 transition-colors"
-      >
-        <IconHistory size={14} />
-      </button>
+        <button
+          title="Open AI Assistant (⌘/)"
+          onClick={onToggleAssistant}
+          className="flex items-center gap-1 px-2.5 h-7 rounded-md border border-zinc-200/80 bg-white text-xs font-medium text-zinc-700 hover:bg-zinc-50 shadow-sm transition-colors"
+        >
+          <span>Assistant</span>
+        </button>
 
-      <button
-        title="Reset project"
-        onClick={onReset}
-        className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 hover:text-rose-600 transition-colors"
-      >
-        <IconRotateCcw size={14} />
-      </button>
+        <button
+          title="Audit History"
+          onClick={onToggleHistory}
+          className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 transition-colors"
+        >
+          <IconHistory size={14} />
+        </button>
 
-      {/* Mobile/Tablet Inspector Toggle */}
-      {onToggleInspector && (
+        <button
+          title="Reset template"
+          onClick={onReset}
+          className="p-1.5 rounded-md text-zinc-600 hover:bg-zinc-100 hover:text-rose-600 transition-colors"
+        >
+          <IconRotateCcw size={14} />
+        </button>
+
+        {/* Toggle Inspector Sidebar Button */}
         <button
           type="button"
           onClick={onToggleInspector}
-          title="Toggle Properties Inspector"
-          className={`lg:hidden ml-1 p-1.5 rounded-md border transition-colors ${
+          title={inspectorOpen ? "Hide Inspector Panel" : "Show Inspector Panel"}
+          className={`ml-1 p-1.5 rounded-md border transition-all ${
             inspectorOpen
-              ? "bg-zinc-800 text-white border-zinc-800"
-              : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"
+              ? "bg-zinc-900 text-white border-zinc-900 shadow-sm"
+              : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-100"
           }`}
         >
           <IconSliders size={14} />
         </button>
-      )}
-    </div>
-  </header>
-);
+      </div>
+    </header>
+  );
+};

@@ -29,9 +29,9 @@ export default function App() {
   const [resetConfirm, setResetConfirm] = useState(false);
   const [saved, setSaved] = useState(true);
 
-  // Responsive drawer states for smaller viewports
-  const [layersOpen, setLayersOpen] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  // Toggleable panel states (open by default on desktop)
+  const [layersOpen, setLayersOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
 
   const revisionClock = useRef(model.revision);
   useEffect(() => { revisionClock.current = Math.max(revisionClock.current, model.revision); }, [model.revision]);
@@ -102,23 +102,23 @@ export default function App() {
       if (meta && e.key.toLowerCase() === "z" && !editing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
       if (meta && e.key.toLowerCase() === "k" && !editing) { e.preventDefault(); setCodeOpen((v) => !v); return; }
       if (meta && e.key === "/" && !editing) { e.preventDefault(); setAssistantOpen((v) => !v); return; }
+      if (meta && e.key.toLowerCase() === "b" && !editing) { e.preventDefault(); setLayersOpen((v) => !v); return; }
+      if (meta && e.key.toLowerCase() === "i" && !editing) { e.preventDefault(); setInspectorOpen((v) => !v); return; }
       if (e.key === "Escape") {
         if (resetConfirm) { setResetConfirm(false); return; }
         if (codeOpen) { setCodeOpen(false); return; }
         if (historyOpen) { setHistoryOpen(false); return; }
         if (assistantOpen) { setAssistantOpen(false); return; }
-        if (layersOpen) { setLayersOpen(false); return; }
-        if (inspectorOpen) { setInspectorOpen(false); return; }
         if (selectedIds.length) { setSelectedIds([]); return; }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [codeOpen, historyOpen, assistantOpen, layersOpen, inspectorOpen, selectedIds, resetConfirm, model, undoStack, redoStack]);
+  }, [codeOpen, historyOpen, assistantOpen, selectedIds, resetConfirm, model, undoStack, redoStack]);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#efede8] text-zinc-900 flex flex-col font-sans">
-      {/* Top Navigation Bar */}
+      {/* Top Navigation Bar with Working Menus & Panel Toggles */}
       <TopBar
         revision={model.revision}
         activeViewport={activeViewport}
@@ -140,9 +140,15 @@ export default function App() {
 
       {/* Main Studio Body Workspace */}
       <div className="flex-1 flex min-h-0 relative overflow-hidden">
-        {/* Docked Left Sidebar: Layers Panel on Large Screens */}
-        <div className="hidden lg:flex shrink-0 h-full">
-          <LayersPanel model={model} selectedIds={selectedIds} onSelect={handleSelection} />
+        {/* Docked Left Sidebar: Layers Panel on Large Screens (Collapsible) */}
+        <div
+          className={`${
+            layersOpen ? "w-60" : "w-0"
+          } hidden lg:flex shrink-0 h-full overflow-hidden transition-[width] duration-200 border-r border-zinc-200/80 bg-[#fbfbfa]`}
+        >
+          <div className="w-60 h-full shrink-0">
+            <LayersPanel model={model} selectedIds={selectedIds} onSelect={handleSelection} />
+          </div>
         </div>
 
         {/* Mobile/Tablet Off-Canvas Layers Drawer */}
@@ -186,14 +192,20 @@ export default function App() {
           </CanvasFrame>
         </main>
 
-        {/* Docked Right Sidebar: Inspector on Large Screens */}
-        <div className="hidden lg:flex shrink-0 h-full">
-          <Inspector
-            model={model}
-            selectedNodes={selectedNodes}
-            activeViewport={activeViewport}
-            onCommitCommand={(c) => commit(c)}
-          />
+        {/* Docked Right Sidebar: Inspector on Large Screens (Collapsible) */}
+        <div
+          className={`${
+            inspectorOpen ? "w-[300px]" : "w-0"
+          } hidden lg:flex shrink-0 h-full overflow-hidden transition-[width] duration-200 border-l border-zinc-200/80 bg-[#fbfbfa]`}
+        >
+          <div className="w-[300px] h-full shrink-0">
+            <Inspector
+              model={model}
+              selectedNodes={selectedNodes}
+              activeViewport={activeViewport}
+              onCommitCommand={(c) => commit(c)}
+            />
+          </div>
         </div>
 
         {/* Mobile/Tablet Off-Canvas Inspector Drawer */}
