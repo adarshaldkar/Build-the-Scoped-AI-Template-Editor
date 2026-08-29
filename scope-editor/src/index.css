@@ -2,57 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    --font-inter: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  }
-
-  body {
-    font-family: var(--font-inter);
-    background-color: #09090b;
-    color: #f4f4f5;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
-    height: 100vh;
-    width: 100vw;
-  }
+:root {
+  --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --surface: #fbfbfa;
+  --workspace: #efede8;
+  --border: #e4e2de;
+  --text: #18181b;
+  --muted: #71717a;
+  --accent: #2563eb;
 }
 
-/* Custom modern scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; }
+body { margin: 0; font-family: var(--font-ui); background: var(--workspace); color: var(--text); overflow: hidden; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+.canvas-frame a { color: inherit; text-decoration: none; }
+.canvas-frame img { display: block; max-width: 100%; }
+.canvas-frame button, .canvas-frame input { font: inherit; }
+.canvas-frame * { box-sizing: border-box; }
 
-::-webkit-scrollbar-thumb {
-  background: #3f3f46;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
-}
-
-/* Animations */
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes slideUp {
-  from { transform: translateY(16px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-.animate-fadeIn {
-  animation: fadeIn 0.15s ease-out forwards;
-}
-
-.animate-slideUp {
-  animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c9c6bf; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #b6b3ac; }

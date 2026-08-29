@@ -1,773 +1,114 @@
-import type {
-  ElementNode,
-  TemplateModel,
-  ElementStyleProps,
-  EditCommand,
-  Viewport,
-  Scope,
-  ValidationError,
-} from "./types";
-import { findNodeById } from "./treeUtils";
+import type { ElementNode, ElementStyleProps, EditCommand, Proposal, ProposalDiff, Scope, TemplateModel, ValidationError, Viewport } from "./types";
+import { getAllNodes } from "./treeUtils";
+import { validatePropertyApplicability } from "./validation";
 
-export interface ProposalDiff {
-  elementId: string;
-  elementName: string;
-  beforeContent?: string;
-  afterContent?: string;
-  beforeProps?: Partial<ElementStyleProps>;
-  afterProps?: Partial<ElementStyleProps>;
-  beforeStructure?: string[];
-  afterStructure?: string[];
+export type AiTargetMode = "selected" | "full";
+
+const QUICK_CHIPS = {
+  text: ["Make it punchier", "Make it concise", "Enterprise B2B", "Minimal Studio"],
+  heading: ["Make it punchier", "Bolder hierarchy", "Enterprise B2B", "Minimal Studio"],
+  button: ["Stronger CTA", "Rounded button", "Accent color"],
+  layout: ["Center align content", "Stack buttons vertically", "Compact spacing"],
+  full: ["Dark luxury theme", "Warm editorial theme", "Polish all buttons", "Move services above about"],
+} as const;
+
+export function getContextualQuickChips(selectedNode: ElementNode | null, targetMode: AiTargetMode, activeViewport: Viewport): string[] {
+  if (targetMode === "full") return activeViewport === "mobile" ? ["Optimize for mobile", "Stack all buttons", "Dark luxury theme", "Compact spacing"] : [...QUICK_CHIPS.full];
+  if (!selectedNode) return [];
+  if (activeViewport === "mobile" && selectedNode.kind === "text") return ["Optimize for mobile", "Scale for mobile", "Align center"];
+  if (selectedNode.kind === "text") return /heading/i.test(selectedNode.name) ? [...QUICK_CHIPS.heading] : [...QUICK_CHIPS.text];
+  if (selectedNode.kind === "button") return [...QUICK_CHIPS.button];
+  if (["section", "container", "card"].includes(selectedNode.kind)) return [...QUICK_CHIPS.layout];
+  return [];
 }
 
-export interface AiProposal {
-  readonly id: string;
-  readonly commandId: string;
-  readonly baseRevision: number;
-  readonly targetIds: string[];
-  readonly scope: Scope;
-  readonly prompt: string;
-  readonly description: string;
-  readonly status: "pending" | "accepted" | "rejected";
-  readonly diffs: ProposalDiff[];
-  readonly command: EditCommand;
+export function isProposalStale(proposal: Proposal, currentModel: TemplateModel): boolean { return proposal.baseRevision !== currentModel.revision; }
+function fail(code: ValidationError["code"], message: string): { success: false; error: ValidationError } { return { success: false, error: { code, message } }; }
+function makeStableId(prefix: string, model: TemplateModel, ids: string[], prompt: string) { return `${prefix}-${model.revision}-${ids.slice().sort().join("_")}-${prompt.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,36)}`; }
+function makeDiff(node: ElementNode, scope: Scope, afterProps?: Partial<ElementStyleProps>, afterContent?: string): ProposalDiff { return { elementId: node.id, elementName: node.name, beforeContent: afterContent !== undefined ? node.content ?? "" : undefined, afterContent, beforeProps: afterProps ? (scope === "all" ? { ...node.baseProps } : { ...(node.overrides[scope as Viewport] ?? {}) }) : undefined, afterProps }; }
+function proposal(model: TemplateModel, prompt: string, targetIds: string[], scope: Scope, description: string, diffs: ProposalDiff[], patches: Record<string,{content?:string;styleProps?:Partial<ElementStyleProps>}> = {}, reorder?: EditCommand["changes"]["reorder"]): Proposal {
+  const commandId = makeStableId("ai-command", model, targetIds, prompt); const id = makeStableId("ai-proposal", model, targetIds, prompt);
+  const command: EditCommand = { commandId, source: "ai_assistant", targetIds, scope, baseRevision: model.revision, changes: { patches, reorder }, metadata: { prompt, description } };
+  return { id, commandId, baseRevision: model.revision, targetIds, scope, prompt, description, status: "pending", stale: false, diffs, command };
 }
 
-// ============================================================
-// 1. CONTEXTUAL QUICK ACTION CHIPS
-// ============================================================
-
-export function getContextualQuickChips(
-  selectedNode: ElementNode | null,
-  targetMode: "selected" | "full",
-  activeViewport: Viewport
-): string[] {
-  if (targetMode === "full") {
-    if (activeViewport === "mobile") {
-      return ["Optimize for Mobile", "Stack All CTAs", "Compact Spacing", "Dark Luxury Theme"];
-    }
-    return ["Dark Luxury Theme", "Warm Editorial Theme", "Polish All CTAs", "Move Services Above About"];
-  }
-
-  if (!selectedNode) {
-    return [];
-  }
-
-  if (activeViewport === "mobile") {
-    if (selectedNode.kind === "container" || selectedNode.id.includes("cta")) {
-      return ["Stack Buttons Vertically", "Full Width Buttons", "Compact Spacing"];
-    }
-    if (selectedNode.kind === "text") {
-      return ["Scale for Mobile", "Punchier Copy", "Align Center"];
-    }
-  }
-
-  if (selectedNode.kind === "text") {
-    if (selectedNode.id.includes("heading")) {
-      return ["Make it Punchier", "Bolder Hierarchy", "Enterprise B2B", "Minimal Studio"];
-    }
-    return ["Make it Concise", "Enterprise Tone", "Refine Spacing"];
-  }
-
-  if (selectedNode.kind === "button") {
-    return ["Stronger CTA", "Rounded Button", "Accent Color"];
-  }
-
-  if (selectedNode.kind === "section" || selectedNode.kind === "container") {
-    return ["Dark Luxury", "Warm Editorial", "Center Align Content"];
-  }
-
-  return ["Make it Punchier", "Dark Luxury Theme", "Bolder Hierarchy"];
-}
-
-// ============================================================
-// 2. DETERMINISTIC INTENT MATCHER & PROPOSAL BUILDER
-// ============================================================
-
-/**
- * Evaluates whether a proposal is stale based on model revision.
- */
-export function isProposalStale(proposal: AiProposal, currentModel: TemplateModel): boolean {
-  return proposal.baseRevision !== currentModel.revision;
-}
-
-/**
- * Pure deterministic AI proposal generator.
- * Maps user prompts to typed, testable proposals across 6 defined scenarios.
- */
-export function generateAiProposal(
-  model: TemplateModel,
-  rawPrompt: string,
-  selectedNode: ElementNode | null,
-  targetMode: "selected" | "full" = "selected",
-  activeViewport: Viewport = "desktop"
-): { success: true; proposal: AiProposal } | { success: false; error: ValidationError } {
+export function generateAiProposal(model: TemplateModel, rawPrompt: string, selectedNodes: ElementNode[], targetMode: AiTargetMode, activeViewport: Viewport): { success: true; proposal: Proposal } | { success: false; error: ValidationError } {
   const prompt = rawPrompt.trim().toLowerCase();
+  if (!prompt) return fail("NO_CHANGES", "Describe an edit before generating a proposal.");
+  if (targetMode === "selected" && selectedNodes.length === 0) return fail("NO_SELECTION", "Select at least one element before requesting an AI edit.");
+  const allNodes = getAllNodes(model.elements);
+  const targets = targetMode === "selected" ? selectedNodes : allNodes;
 
-  // Guard 1: Strict Selection Authority
-  if (targetMode === "selected" && !selectedNode) {
-    return {
-      success: false,
-      error: {
-        code: "INVALID_SCOPE_SELECTION",
-        message: "No element selected. Please select an element on the canvas or switch to Full Template mode.",
-      },
-    };
+  // Structural reorder: intentionally documented demo target, discovered by semantic section names.
+  if (/services above about|move services|reorder services/.test(prompt)) {
+    if (targetMode !== "full") return fail("INVALID_SCOPE_SELECTION", "Structural reordering requires Full Template target mode.");
+    const services = model.elements.find((n) => n.kind === "section" && /services/i.test(n.name));
+    const about = model.elements.find((n) => n.kind === "section" && /about/i.test(n.name));
+    if (!services || !about) return fail("TARGET_NOT_FOUND", "The requested sections are not present in the template.");
+    const sourceIndex = model.elements.findIndex((n) => n.id === services.id);
+    const targetIndex = model.elements.findIndex((n) => n.id === about.id);
+    if (sourceIndex === -1 || targetIndex === -1) return fail("TARGET_NOT_FOUND", "The requested sections are not present in the template.");
+    if (sourceIndex === targetIndex) return fail("NO_CHANGES", "Cannot move section to the same position.");
+    const after = [...model.elements]; const [moved] = after.splice(sourceIndex, 1); after.splice(targetIndex, 0, moved);
+    const diff: ProposalDiff = { elementId: model.templateId, elementName: "Page Sections", beforeContent: model.elements.map((n)=>n.name).join(" → "), afterContent: after.map((n)=>n.name).join(" → ") };
+    return { success: true, proposal: proposal(model, rawPrompt, [model.templateId], "all", `Move ${services.name} above ${about.name}`, [diff], {}, { parentId: model.templateId, sourceIndex, targetIndex }) };
   }
 
-  const proposalId = `prop_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const commandId = `cmd_ai_${Date.now()}`;
-  const baseRevision = model.revision;
-
-  // ------------------------------------------------------------
-  // SCENARIO 6: Structural Reordering
-  // ------------------------------------------------------------
-  if (
-    prompt.includes("move services above about") ||
-    prompt.includes("reorder services") ||
-    prompt.includes("services above about")
-  ) {
-    const rootContainer = model;
-    const servicesIndex = rootContainer.elements.findIndex((el) => el.id === "services");
-    const aboutIndex = rootContainer.elements.findIndex((el) => el.id === "about");
-
-    if (servicesIndex === -1 || aboutIndex === -1) {
-      return {
-        success: false,
-        error: {
-          code: "TARGET_NOT_FOUND",
-          message: "Services or About section not found in template.",
-        },
-      };
-    }
-
-    const beforeStructure = rootContainer.elements.map((el) => el.name);
-    const targetIdx = Math.min(servicesIndex, aboutIndex);
-    const sourceIdx = Math.max(servicesIndex, aboutIndex);
-
-    const reordered = [...rootContainer.elements];
-    const [moved] = reordered.splice(sourceIdx, 1);
-    reordered.splice(targetIdx, 0, moved);
-    const afterStructure = reordered.map((el) => el.name);
-
-    const command: EditCommand = {
-      commandId,
-      source: "ai_assistant",
-      targetIds: ["nova-studio-landing"],
-      scope: "all",
-      baseRevision,
-      changes: {
-        reorder: {
-          parentId: "nova-studio-landing",
-          sourceIndex: sourceIdx,
-          targetIndex: targetIdx,
-        },
-      },
-      metadata: {
-        prompt: rawPrompt,
-        description: "Move Services section above About section",
-      },
-    };
-
-    return {
-      success: true,
-      proposal: {
-        id: proposalId,
-        commandId,
-        baseRevision,
-        targetIds: ["nova-studio-landing"],
-        scope: "all",
-        prompt: rawPrompt,
-        description: "Move Services section above About section",
-        status: "pending",
-        diffs: [
-          {
-            elementId: "nova-studio-landing",
-            elementName: "Page Sections",
-            beforeStructure,
-            afterStructure,
-          },
-        ],
-        command,
-      },
-    };
+  if (/polish all|all buttons|polish buttons|cta buttons/.test(prompt)) {
+    const buttonTargets = targetMode === "selected" ? targets.filter((n)=>n.kind === "button") : allNodes.filter((n)=>n.kind === "button");
+    if (!buttonTargets.length) return fail("INVALID_SCOPE_SELECTION", "Select at least one button for this transformation.");
+    const patches: Record<string,{styleProps:Partial<ElementStyleProps>}> = {}; const diffs: ProposalDiff[] = [];
+    for (const node of buttonTargets) { const style: Partial<ElementStyleProps> = { borderRadius: 8, fontWeight: 600, paddingTop: 12, paddingBottom: 12 }; if (validatePropertyApplicability(node.kind,style)) continue; patches[node.id]={styleProps:style}; diffs.push(makeDiff(node,"all",style)); }
+    return diffs.length ? { success:true, proposal:proposal(model,rawPrompt,buttonTargets.map(n=>n.id),"all","Polish selected buttons with consistent hierarchy",diffs,patches) } : fail("INCOMPATIBLE_PROPERTY_FOR_ELEMENT","No selected buttons support the requested style.");
   }
 
-  // ------------------------------------------------------------
-  // SCENARIO 5: Multi-Element Synchronized Transformations
-  // ------------------------------------------------------------
-  if (
-    prompt.includes("polish all cta") ||
-    prompt.includes("all buttons") ||
-    prompt.includes("polish buttons") ||
-    prompt.includes("align hero content center") ||
-    prompt.includes("center align hero")
-  ) {
-    if (prompt.includes("polish all cta") || prompt.includes("all buttons") || prompt.includes("polish buttons")) {
-      const buttonIds = ["hero-btn-1", "hero-btn-2", "cta-btn-1"];
-      const existingButtonIds = buttonIds.filter((id) => findNodeById(model.elements, id) !== null);
-
-      const patches: Record<string, { styleProps: Partial<ElementStyleProps> }> = {};
-      const diffs: ProposalDiff[] = [];
-
-      for (const btnId of existingButtonIds) {
-        const node = findNodeById(model.elements, btnId)!;
-        const newProps: Partial<ElementStyleProps> = {
-          borderRadius: 8,
-          fontWeight: 600,
-          paddingTop: 12,
-          paddingBottom: 12,
-          paddingLeft: 24,
-          paddingRight: 24,
-        };
-
-        patches[btnId] = { styleProps: newProps };
-        diffs.push({
-          elementId: btnId,
-          elementName: node.name,
-          beforeProps: {
-            borderRadius: node.baseProps.borderRadius,
-            fontWeight: node.baseProps.fontWeight,
-            paddingTop: node.baseProps.paddingTop,
-          },
-          afterProps: newProps,
-        });
-      }
-
-      const command: EditCommand = {
-        commandId,
-        source: "ai_assistant",
-        targetIds: existingButtonIds,
-        scope: "all",
-        baseRevision,
-        changes: { patches },
-        metadata: { prompt: rawPrompt, description: "Polish all CTA buttons with unified radius and padding" },
-      };
-
-      return {
-        success: true,
-        proposal: {
-          id: proposalId,
-          commandId,
-          baseRevision,
-          targetIds: existingButtonIds,
-          scope: "all",
-          prompt: rawPrompt,
-          description: "Polish all CTA buttons with unified radius and padding",
-          status: "pending",
-          diffs,
-          command,
-        },
-      };
-    }
-
-    if (prompt.includes("align hero content center") || prompt.includes("center align hero")) {
-      const heroTargetIds = ["hero-eyebrow", "hero-heading", "hero-desc", "hero-cta"];
-      const patches: Record<string, { styleProps: Partial<ElementStyleProps> }> = {};
-      const diffs: ProposalDiff[] = [];
-
-      for (const targetId of heroTargetIds) {
-        const node = findNodeById(model.elements, targetId);
-        if (!node) continue;
-
-        const newProps: Partial<ElementStyleProps> =
-          node.kind === "container"
-            ? { justifyContent: "center", alignItems: "center" }
-            : { textAlign: "center" };
-
-        patches[targetId] = { styleProps: newProps };
-        diffs.push({
-          elementId: targetId,
-          elementName: node.name,
-          beforeProps: {
-            textAlign: node.baseProps.textAlign,
-            justifyContent: node.baseProps.justifyContent,
-          },
-          afterProps: newProps,
-        });
-      }
-
-      const command: EditCommand = {
-        commandId,
-        source: "ai_assistant",
-        targetIds: Object.keys(patches),
-        scope: "all",
-        baseRevision,
-        changes: { patches },
-        metadata: { prompt: rawPrompt, description: "Center-align all Hero content and CTA buttons" },
-      };
-
-      return {
-        success: true,
-        proposal: {
-          id: proposalId,
-          commandId,
-          baseRevision,
-          targetIds: Object.keys(patches),
-          scope: "all",
-          prompt: rawPrompt,
-          description: "Center-align all Hero content and CTA buttons",
-          status: "pending",
-          diffs,
-          command,
-        },
-      };
-    }
+  if (/stack .*buttons|full width|optimize .*mobile/.test(prompt)) {
+    if (activeViewport !== "mobile") return fail("INVALID_SCOPE_SELECTION", "Switch to Mobile before generating a mobile-only layout proposal.");
+    const containerTargets = targets.filter((n)=>["container","section","card"].includes(n.kind));
+    const buttonTargets = targets.filter((n)=>n.kind === "button");
+    const chosen = targetMode === "selected" ? (containerTargets.length ? containerTargets : buttonTargets) : allNodes.filter((n)=>n.kind === "container" && /cta|button/i.test(n.name));
+    if (!chosen.length) return fail("NO_SELECTION", "Select the CTA group or buttons for mobile optimization.");
+    const patches: Record<string,{styleProps:Partial<ElementStyleProps>}> = {}; const diffs: ProposalDiff[]=[];
+    for (const node of chosen) { const style: Partial<ElementStyleProps> = node.kind === "button" ? {width:"100%"} : {flexDirection:"column",gap:12,width:"100%"}; if (validatePropertyApplicability(node.kind,style)) continue; patches[node.id]={styleProps:style}; diffs.push(makeDiff(node,"mobile",style)); }
+    return diffs.length ? {success:true,proposal:proposal(model,rawPrompt,chosen.map(n=>n.id),"mobile","Optimize selected layout for Mobile",diffs,patches)} : fail("INCOMPATIBLE_PROPERTY_FOR_ELEMENT","No selected elements support mobile optimization.");
   }
 
-  // ------------------------------------------------------------
-  // SCENARIO 3: Color Palette & Theme Shifting (Full Template / Section)
-  // ------------------------------------------------------------
-  if (
-    prompt.includes("dark luxury") ||
-    prompt.includes("dark theme") ||
-    prompt.includes("warm editorial") ||
-    prompt.includes("warm theme") ||
-    prompt.includes("vibrant accent")
-  ) {
-    const isDark = prompt.includes("dark");
-    const isWarm = prompt.includes("warm");
-
-    const sectionBg = isDark ? "#09090B" : isWarm ? "#FAF9F6" : "#FFFFFF";
-    const textColor = isDark ? "#F4F4F5" : isWarm ? "#18181B" : "#18181B";
-    const btnBg = isDark ? "#FAFAFA" : isWarm ? "#18181B" : "#3D5AFE";
-    const btnColor = isDark ? "#09090B" : "#FFFFFF";
-
-    if (targetMode === "full") {
-      const targetSectionIds = ["hero", "services", "about", "cta", "footer"];
-      const patches: Record<string, { styleProps: Partial<ElementStyleProps> }> = {};
-      const diffs: ProposalDiff[] = [];
-
-      for (const secId of targetSectionIds) {
-        const node = findNodeById(model.elements, secId);
-        if (!node) continue;
-
-        patches[secId] = { styleProps: { backgroundColor: sectionBg } };
-        diffs.push({
-          elementId: secId,
-          elementName: node.name,
-          beforeProps: { backgroundColor: node.baseProps.backgroundColor },
-          afterProps: { backgroundColor: sectionBg },
-        });
-      }
-
-      // Add hero heading and buttons
-      const heroHeading = findNodeById(model.elements, "hero-heading");
-      if (heroHeading) {
-        patches["hero-heading"] = { styleProps: { color: textColor } };
-        diffs.push({
-          elementId: "hero-heading",
-          elementName: heroHeading.name,
-          beforeProps: { color: heroHeading.baseProps.color },
-          afterProps: { color: textColor },
-        });
-      }
-
-      const heroBtn = findNodeById(model.elements, "hero-btn-1");
-      if (heroBtn) {
-        patches["hero-btn-1"] = { styleProps: { backgroundColor: btnBg, color: btnColor } };
-        diffs.push({
-          elementId: "hero-btn-1",
-          elementName: heroBtn.name,
-          beforeProps: { backgroundColor: heroBtn.baseProps.backgroundColor, color: heroBtn.baseProps.color },
-          afterProps: { backgroundColor: btnBg, color: btnColor },
-        });
-      }
-
-      const command: EditCommand = {
-        commandId,
-        source: "ai_assistant",
-        targetIds: Object.keys(patches),
-        scope: "all",
-        baseRevision,
-        changes: { patches },
-        metadata: {
-          prompt: rawPrompt,
-          description: `Apply ${isDark ? "Dark Luxury" : isWarm ? "Warm Editorial" : "Vibrant"} theme across page`,
-        },
-      };
-
-      return {
-        success: true,
-        proposal: {
-          id: proposalId,
-          commandId,
-          baseRevision,
-          targetIds: Object.keys(patches),
-          scope: "all",
-          prompt: rawPrompt,
-          description: `Apply ${isDark ? "Dark Luxury" : isWarm ? "Warm Editorial" : "Vibrant"} theme across page`,
-          status: "pending",
-          diffs,
-          command,
-        },
-      };
-    } else if (selectedNode) {
-      // Apply theme to selected node only
-      const newProps: Partial<ElementStyleProps> =
-        selectedNode.kind === "button"
-          ? { backgroundColor: btnBg, color: btnColor }
-          : selectedNode.kind === "section"
-          ? { backgroundColor: sectionBg }
-          : { color: textColor };
-
-      const command: EditCommand = {
-        commandId,
-        source: "ai_assistant",
-        targetIds: [selectedNode.id],
-        scope: "all",
-        baseRevision,
-        changes: {
-          patches: {
-            [selectedNode.id]: { styleProps: newProps },
-          },
-        },
-        metadata: {
-          prompt: rawPrompt,
-          description: `Apply theme styling to ${selectedNode.name}`,
-        },
-      };
-
-      return {
-        success: true,
-        proposal: {
-          id: proposalId,
-          commandId,
-          baseRevision,
-          targetIds: [selectedNode.id],
-          scope: "all",
-          prompt: rawPrompt,
-          description: `Apply theme styling to ${selectedNode.name}`,
-          status: "pending",
-          diffs: [
-            {
-              elementId: selectedNode.id,
-              elementName: selectedNode.name,
-              beforeProps: { ...selectedNode.baseProps },
-              afterProps: newProps,
-            },
-          ],
-          command,
-        },
-      };
-    }
+  if (/dark luxury|dark theme|warm editorial|vibrant studio/.test(prompt)) {
+    const dark=/dark/.test(prompt); const warm=/warm/.test(prompt); const nodes = targetMode === "selected" ? targets : allNodes.filter((n)=>["section","container","card","button","text","link"].includes(n.kind));
+    const patches: Record<string,{styleProps:Partial<ElementStyleProps>}>={}; const diffs: ProposalDiff[]=[];
+    for (const node of nodes) { let style:Partial<ElementStyleProps>={}; if (["section","container","card"].includes(node.kind)) style.backgroundColor=dark?"#09090B":warm?"#FAF9F6":"#FFFFFF"; else if(node.kind==="button"){style.backgroundColor=dark?"#FAFAFA":warm?"#18181B":"#3D5AFE";style.color=dark?"#09090B":"#FFFFFF";} else if(["text","link"].includes(node.kind)) style.color=dark?"#F4F4F5":"#18181B"; if(Object.keys(style).length && !validatePropertyApplicability(node.kind,style)){patches[node.id]={styleProps:style};diffs.push(makeDiff(node,"all",style));}}
+    return diffs.length ? {success:true,proposal:proposal(model,rawPrompt,diffs.map(d=>d.elementId),"all",`Apply ${dark?"dark luxury":warm?"warm editorial":"vibrant studio"} visual direction`,diffs,patches)} : fail("INCOMPATIBLE_PROPERTY_FOR_ELEMENT","No targets support the requested theme.");
   }
 
-  // ------------------------------------------------------------
-  // SCENARIO 4: Responsive Mobile Layout Adjustments (Viewport Scoped)
-  // ------------------------------------------------------------
-  if (
-    activeViewport === "mobile" ||
-    prompt.includes("mobile") ||
-    prompt.includes("stack buttons") ||
-    prompt.includes("full width")
-  ) {
-    const target = selectedNode || findNodeById(model.elements, "hero-cta") || model.elements[0];
-
-    if (prompt.includes("stack") || prompt.includes("full width") || target.id === "hero-cta") {
-      const ctaNode = findNodeById(model.elements, "hero-cta")!;
-      const btn1 = findNodeById(model.elements, "hero-btn-1")!;
-      const btn2 = findNodeById(model.elements, "hero-btn-2")!;
-
-      const patches: Record<string, { styleProps: Partial<ElementStyleProps> }> = {
-        "hero-cta": { styleProps: { flexDirection: "column", gap: 12, width: "100%" } },
-        "hero-btn-1": { styleProps: { width: "100%" } },
-        "hero-btn-2": { styleProps: { width: "100%" } },
-      };
-
-      const diffs: ProposalDiff[] = [
-        {
-          elementId: "hero-cta",
-          elementName: ctaNode.name,
-          beforeProps: { flexDirection: ctaNode.overrides.mobile?.flexDirection || "row", gap: ctaNode.overrides.mobile?.gap || 16 },
-          afterProps: { flexDirection: "column", gap: 12, width: "100%" },
-        },
-        {
-          elementId: "hero-btn-1",
-          elementName: btn1.name,
-          beforeProps: { width: btn1.overrides.mobile?.width || "auto" },
-          afterProps: { width: "100%" },
-        },
-        {
-          elementId: "hero-btn-2",
-          elementName: btn2.name,
-          beforeProps: { width: btn2.overrides.mobile?.width || "auto" },
-          afterProps: { width: "100%" },
-        },
-      ];
-
-      const command: EditCommand = {
-        commandId,
-        source: "ai_assistant",
-        targetIds: ["hero-cta", "hero-btn-1", "hero-btn-2"],
-        scope: "mobile", // Strict mobile viewport isolation!
-        baseRevision,
-        changes: { patches },
-        metadata: { prompt: rawPrompt, description: "Stack CTA buttons vertically with 100% width on Mobile" },
-      };
-
-      return {
-        success: true,
-        proposal: {
-          id: proposalId,
-          commandId,
-          baseRevision,
-          targetIds: ["hero-cta", "hero-btn-1", "hero-btn-2"],
-          scope: "mobile",
-          prompt: rawPrompt,
-          description: "Stack CTA buttons vertically with 100% width on Mobile",
-          status: "pending",
-          diffs,
-          command,
-        },
-      };
-    }
-
-    if (target.kind === "text") {
-      const newProps: Partial<ElementStyleProps> = {
-        fontSize: target.id.includes("heading") ? 32 : 15,
-        lineHeight: 1.25,
-      };
-
-      const command: EditCommand = {
-        commandId,
-        source: "ai_assistant",
-        targetIds: [target.id],
-        scope: "mobile",
-        baseRevision,
-        changes: {
-          patches: {
-            [target.id]: { styleProps: newProps },
-          },
-        },
-        metadata: { prompt: rawPrompt, description: `Scale typography for Mobile viewport` },
-      };
-
-      return {
-        success: true,
-        proposal: {
-          id: proposalId,
-          commandId,
-          baseRevision,
-          targetIds: [target.id],
-          scope: "mobile",
-          prompt: rawPrompt,
-          description: `Scale typography for Mobile viewport`,
-          status: "pending",
-          diffs: [
-            {
-              elementId: target.id,
-              elementName: target.name,
-              beforeProps: { fontSize: target.overrides.mobile?.fontSize || target.baseProps.fontSize },
-              afterProps: newProps,
-            },
-          ],
-          command,
-        },
-      };
-    }
+  if (/bolder|hierarchy|larger|minimal|refined/.test(prompt)) {
+    const textTargets = targets.filter((n)=>n.kind === "text"); if(!textTargets.length) return fail("INVALID_SCOPE_SELECTION","Select text elements for a typography proposal.");
+    const bold=/bolder|hierarchy|larger/.test(prompt); const patches: Record<string,{styleProps:Partial<ElementStyleProps>}>={}; const diffs:ProposalDiff[]=[];
+    for(const node of textTargets){const style:Partial<ElementStyleProps>=bold?{fontSize:node.tag==="h1"?64:24,fontWeight:800,letterSpacing:-1,lineHeight:1.1}:{fontSize:48,fontWeight:600,letterSpacing:0.5,lineHeight:1.2}; patches[node.id]={styleProps:style};diffs.push(makeDiff(node,"all",style));}
+    return {success:true,proposal:proposal(model,rawPrompt,textTargets.map(n=>n.id),"all",bold?"Increase visual hierarchy":"Apply minimal refined typography",diffs,patches)};
   }
 
-  // ------------------------------------------------------------
-  // SCENARIO 2: Visual Hierarchy & Typography Scaling
-  // ------------------------------------------------------------
-  if (
-    prompt.includes("hierarchy") ||
-    prompt.includes("bolder") ||
-    prompt.includes("larger") ||
-    prompt.includes("minimal") ||
-    prompt.includes("refined")
-  ) {
-    if (!selectedNode) {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_SCOPE_SELECTION",
-          message: "Please select an element to adjust typography hierarchy.",
-        },
-      };
-    }
-
-    const isBolder = prompt.includes("bolder") || prompt.includes("hierarchy") || prompt.includes("larger");
-    const newProps: Partial<ElementStyleProps> = isBolder
-      ? { fontSize: 64, fontWeight: 800, letterSpacing: -1, lineHeight: 1.1 }
-      : { fontSize: 48, fontWeight: 600, letterSpacing: 0.5, lineHeight: 1.25 };
-
-    const command: EditCommand = {
-      commandId,
-      source: "ai_assistant",
-      targetIds: [selectedNode.id],
-      scope: "all",
-      baseRevision,
-      changes: {
-        patches: {
-          [selectedNode.id]: { styleProps: newProps },
-        },
-      },
-      metadata: {
-        prompt: rawPrompt,
-        description: isBolder ? "Increase visual hierarchy and weight" : "Apply minimal, refined typography",
-      },
-    };
-
-    return {
-      success: true,
-      proposal: {
-        id: proposalId,
-        commandId,
-        baseRevision,
-        targetIds: [selectedNode.id],
-        scope: "all",
-        prompt: rawPrompt,
-        description: isBolder ? "Increase visual hierarchy and weight" : "Apply minimal, refined typography",
-        status: "pending",
-        diffs: [
-          {
-            elementId: selectedNode.id,
-            elementName: selectedNode.name,
-            beforeProps: {
-              fontSize: selectedNode.baseProps.fontSize,
-              fontWeight: selectedNode.baseProps.fontWeight,
-            },
-            afterProps: newProps,
-          },
-        ],
-        command,
-      },
-    };
+  if (/punchier|concise|enterprise|corporate|creative|headline|copy/.test(prompt)) {
+    const textTargets=targets.filter(n=>["text","button","link"].includes(n.kind)); if(!textTargets.length) return fail("INVALID_SCOPE_SELECTION","Select text, button, or link elements for copy edits.");
+    const enterprise=/enterprise|corporate|b2b/.test(prompt); const creative=/creative|minimal|studio|craft/.test(prompt); const patches: Record<string,{content:string}>={}; const diffs:ProposalDiff[]=[];
+    for(const node of textTargets){let after=node.content??""; if(node.tag==="h1"||/heading/i.test(node.name)) after=enterprise?"Enterprise-grade digital experience engineering.":creative?"Form. Function. Digital craft.":"Digital products built to lead."; else if(node.kind==="button") after=enterprise?"Request Enterprise Demo":"Get Started"; else after=enterprise?"Partnering with global organizations to design scalable digital systems and platforms.":creative?"An independent design and development studio shaping modern digital products.":"We design and ship high-impact digital experiences for ambitious brands."; if(after!==node.content){patches[node.id]={content:after};diffs.push(makeDiff(node,"all",undefined,after));}}
+    return diffs.length ? {success:true,proposal:proposal(model,rawPrompt,diffs.map(d=>d.elementId),"all",enterprise?"Rewrite in an enterprise tone":creative?"Rewrite in a minimal studio tone":"Rewrite with punchier copy",diffs,patches)} : fail("NO_CHANGES","The selected content already matches the deterministic proposal.");
   }
 
-  // ------------------------------------------------------------
-  // SCENARIO 1: Copywriting & Tone Transformation
-  // ------------------------------------------------------------
-  if (
-    prompt.includes("punchier") ||
-    prompt.includes("concise") ||
-    prompt.includes("enterprise") ||
-    prompt.includes("corporate") ||
-    prompt.includes("creative") ||
-    prompt.includes("copy") ||
-    prompt.includes("text") ||
-    prompt.includes("headline")
-  ) {
-    if (!selectedNode) {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_SCOPE_SELECTION",
-          message: "Please select a text element to apply copywriting transformation.",
-        },
-      };
-    }
+  return fail("NO_CHANGES", "No documented deterministic scenario matched this instruction. Use a quick action.");
+}
 
-    const isEnterprise = prompt.includes("enterprise") || prompt.includes("corporate") || prompt.includes("b2b");
-    const isCreative = prompt.includes("creative") || prompt.includes("minimal") || prompt.includes("craft");
-
-    let afterContent = "Digital products built to lead.";
-
-    if (selectedNode.id.includes("heading")) {
-      afterContent = isEnterprise
-        ? "Enterprise-grade digital experience engineering."
-        : isCreative
-        ? "Form. Function. Digital craft."
-        : "Digital products built to lead.";
-    } else if (selectedNode.id.includes("desc")) {
-      afterContent = isEnterprise
-        ? "Partnering with global organizations to design scalable digital systems and platforms."
-        : isCreative
-        ? "An independent design and development studio shaping modern digital products."
-        : "We design and ship high-impact digital experiences for ambitious brands.";
-    } else if (selectedNode.kind === "button") {
-      afterContent = isEnterprise ? "Request Enterprise Demo" : "Get Started";
-    }
-
-    const command: EditCommand = {
-      commandId,
-      source: "ai_assistant",
-      targetIds: [selectedNode.id],
-      scope: "all", // Content changes strictly require scope: "all"
-      baseRevision,
-      changes: {
-        patches: {
-          [selectedNode.id]: { content: afterContent },
-        },
-      },
-      metadata: {
-        prompt: rawPrompt,
-        description: `Rewrite ${selectedNode.name} (${isEnterprise ? "Enterprise Tone" : isCreative ? "Minimal Tone" : "Punchy Tone"})`,
-      },
-    };
-
-    return {
-      success: true,
-      proposal: {
-        id: proposalId,
-        commandId,
-        baseRevision,
-        targetIds: [selectedNode.id],
-        scope: "all",
-        prompt: rawPrompt,
-        description: `Rewrite ${selectedNode.name} (${isEnterprise ? "Enterprise Tone" : isCreative ? "Minimal Tone" : "Punchy Tone"})`,
-        status: "pending",
-        diffs: [
-          {
-            elementId: selectedNode.id,
-            elementName: selectedNode.name,
-            beforeContent: selectedNode.content || "",
-            afterContent,
-          },
-        ],
-        command,
-      },
-    };
+export function buildAcceptedProposalCommand(proposalInput: Proposal, acceptedIds: string[], currentModel: TemplateModel): EditCommand | null {
+  if (!acceptedIds.length) return null;
+  if (proposalInput.command.changes.reorder) return acceptedIds.length === 1 ? { ...proposalInput.command, baseRevision: currentModel.revision } : null;
+  const filteredPatches: Record<string, { content?: string; styleProps?: Partial<ElementStyleProps> }> = {};
+  for (const id of acceptedIds) {
+    if (proposalInput.command.changes.patches?.[id]) filteredPatches[id] = proposalInput.command.changes.patches[id];
   }
-
-  // Fallback: Generic punchy update if recognized element
-  if (selectedNode && selectedNode.content) {
-    const afterContent = "Designed for measurable impact.";
-    const command: EditCommand = {
-      commandId,
-      source: "ai_assistant",
-      targetIds: [selectedNode.id],
-      scope: "all",
-      baseRevision,
-      changes: {
-        patches: {
-          [selectedNode.id]: { content: afterContent },
-        },
-      },
-      metadata: { prompt: rawPrompt, description: `Refine copy on ${selectedNode.name}` },
-    };
-
-    return {
-      success: true,
-      proposal: {
-        id: proposalId,
-        commandId,
-        baseRevision,
-        targetIds: [selectedNode.id],
-        scope: "all",
-        prompt: rawPrompt,
-        description: `Refine copy on ${selectedNode.name}`,
-        status: "pending",
-        diffs: [
-          {
-            elementId: selectedNode.id,
-            elementName: selectedNode.name,
-            beforeContent: selectedNode.content,
-            afterContent,
-          },
-        ],
-        command,
-      },
-    };
-  }
-
+  if (!Object.keys(filteredPatches).length) return null;
   return {
-    success: false,
-    error: {
-      code: "NO_CHANGES",
-      message: `Could not determine a deterministic transformation for prompt "${rawPrompt}". Try a quick action chip.`,
-    },
+    ...proposalInput.command,
+    baseRevision: currentModel.revision,
+    targetIds: Object.keys(filteredPatches),
+    changes: { patches: filteredPatches },
   };
 }

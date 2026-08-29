@@ -1,13 +1,6 @@
 export type Viewport = "desktop" | "tablet" | "mobile";
-
 export type Scope = "all" | Viewport;
-
-export type EditSource =
-  | "canvas"
-  | "inspector"
-  | "code_editor"
-  | "ai_assistant"
-  | "history_restore";
+export type EditSource = "canvas" | "inspector" | "code_editor" | "ai_assistant" | "history_restore";
 
 export interface ElementStyleProps {
   fontFamily?: string;
@@ -38,20 +31,12 @@ export interface ElementStyleProps {
 }
 
 export interface ViewportOverrides {
-  desktop?: Partial<ElementStyleProps>;
   tablet?: Partial<ElementStyleProps>;
   mobile?: Partial<ElementStyleProps>;
+  desktop?: Partial<ElementStyleProps>;
 }
 
-export type ElementKind =
-  | "section"
-  | "container"
-  | "text"
-  | "button"
-  | "image"
-  | "link"
-  | "input"
-  | "card";
+export type ElementKind = "section" | "container" | "text" | "button" | "image" | "link" | "input" | "card";
 
 export interface ElementNode {
   readonly id: string;
@@ -63,6 +48,10 @@ export interface ElementNode {
   overrides: ViewportOverrides;
   children?: ElementNode[];
   version: number;
+  /** Semantic tag is part of the model; rendering does not infer meaning from ID names. */
+  tag?: "section" | "div" | "h1" | "h2" | "h3" | "p" | "span" | "button" | "a" | "img" | "input";
+  /** Optional presentation hints for editor UX; never used as identity. */
+  editable?: boolean;
 }
 
 export interface TemplateModel {
@@ -79,6 +68,14 @@ export interface ElementPatch {
   styleProps?: Partial<ElementStyleProps>;
 }
 
+export interface ReorderChange {
+  parentId: string;
+  sourceIndex?: number;
+  targetIndex?: number;
+  /** Exact sibling order used by granular history restore. */
+  order?: string[];
+}
+
 export interface EditCommand {
   commandId: string;
   source: EditSource;
@@ -89,11 +86,7 @@ export interface EditCommand {
     content?: string;
     styleProps?: Partial<ElementStyleProps>;
     patches?: Record<string, ElementPatch>;
-    reorder?: {
-      parentId: string;
-      sourceIndex: number;
-      targetIndex: number;
-    };
+    reorder?: ReorderChange;
   };
   metadata?: {
     prompt?: string;
@@ -120,6 +113,14 @@ export interface RevisionEntry {
     props?: Partial<ElementStyleProps>;
   };
   globalRevision: number;
+  structure?: {
+    parentId: string;
+    movedElementId: string;
+    beforeOrder: string[];
+    afterOrder: string[];
+    beforeIndex: number;
+    afterIndex: number;
+  };
 }
 
 export type ValidationErrorCode =
@@ -134,7 +135,9 @@ export type ValidationErrorCode =
   | "INVALID_REORDER"
   | "INVALID_TEMPLATE_MODEL"
   | "DELETED_REQUIRED_ID"
-  | "INVALID_SCOPE_SELECTION";
+  | "INVALID_SCOPE_SELECTION"
+  | "INVALID_COMMAND_TARGETS"
+  | "NO_SELECTION";
 
 export interface ValidationError {
   code: ValidationErrorCode;
@@ -143,36 +146,31 @@ export interface ValidationError {
 }
 
 export type CommitResult =
-  | {
-      success: true;
-      model: TemplateModel;
-      historyEntries: RevisionEntry[];
-    }
-  | {
-      success: false;
-      error: ValidationError;
-    };
+  | { success: true; model: TemplateModel; historyEntries: RevisionEntry[] }
+  | { success: false; error: ValidationError };
+
+export interface ProposalDiff {
+  elementId: string;
+  elementName: string;
+  beforeContent?: string;
+  afterContent?: string;
+  beforeProps?: Partial<ElementStyleProps>;
+  afterProps?: Partial<ElementStyleProps>;
+}
 
 export interface Proposal {
   id: string;
-  elementId: string;
-  elementName: string;
-  before: string;
-  after: string;
+  commandId: string;
+  baseRevision: number;
+  targetIds: string[];
   scope: Scope;
+  prompt: string;
+  description: string;
   status: "pending" | "accepted" | "rejected";
-  stale?: boolean;
-  styleChanges?: Partial<ElementStyleProps>;
+  stale: boolean;
+  diffs: ProposalDiff[];
+  command: EditCommand;
 }
 
-export const VIEWPORT_WIDTHS: Record<Viewport, number> = {
-  desktop: 1440,
-  tablet: 768,
-  mobile: 375,
-};
-
-export const VIEWPORT_LABELS: Record<Viewport, string> = {
-  desktop: "Desktop",
-  tablet: "Tablet",
-  mobile: "Mobile",
-};
+export const VIEWPORT_WIDTHS: Record<Viewport, number> = { desktop: 1440, tablet: 768, mobile: 375 };
+export const VIEWPORT_LABELS: Record<Viewport, string> = { desktop: "Desktop", tablet: "Tablet", mobile: "Mobile" };

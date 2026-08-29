@@ -1,18 +1,9 @@
 import type { ElementNode, ElementStyleProps, Viewport } from "./types";
-
-/**
- * Resolves the computed style properties for an element at a given viewport.
- * Cascade Rule: Viewport Override -> Base Props -> Default Empty
- */
-export function resolveElementProps(
-  node: ElementNode,
-  viewport: Viewport
-): ElementStyleProps {
-  const base = node.baseProps || {};
-  const override = node.overrides?.[viewport] || {};
-
-  return {
-    ...base,
-    ...override,
-  };
+const DEFAULTS: ElementStyleProps = { fontFamily: "Inter", lineHeight: 1.4, opacity: 1 };
+export function resolveElementProps(node: ElementNode, viewport: Viewport): ElementStyleProps {
+  return { ...DEFAULTS, ...node.baseProps, ...(node.overrides[viewport] ?? {}) };
+}
+export function isPropertyOverridden(node: ElementNode, viewport: Viewport, propertyKey: keyof ElementStyleProps): boolean {
+  if (viewport === "desktop") return false;
+  return node.overrides[viewport]?.[propertyKey] !== undefined;
 }

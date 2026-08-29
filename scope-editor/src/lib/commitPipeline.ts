@@ -1,386 +1,140 @@
-import { EditCommandSchema, validatePropertyApplicability } from "./validation";
-import { findNodeById, mapNodeTree, getAllNodeIds, reorderChildren } from "./treeUtils";
-import type {
-  TemplateModel,
-  EditCommand,
-  CommitResult,
-  RevisionEntry,
-  ElementNode,
-  Viewport,
-  ValidationError,
-  ElementStyleProps,
-} from "./types";
+import { EditCommandSchema, validatePropertyApplicability, isMeaningfulChange } from "./validation";
+import { findNodeById, getAllNodeIds, mapNodeTree, reorderChildren } from "./treeUtils";
+import type { TemplateModel, EditCommand, CommitResult, RevisionEntry, ElementNode, Viewport, ValidationError, ElementStyleProps } from "./types";
 
-/**
- * Validates a raw edit command against Tier 1 Zod schema and Tier 2 Business Rules.
- * Pure function: does NOT modify state.
- */
-export function validateEditCommand(
-  model: TemplateModel,
-  rawCommand: unknown
-): { valid: true; command: EditCommand } | { valid: false; error: ValidationError } {
-  // ------------------------------------------------------------
-  // TIER 1: ZOD RUNTIME SCHEMA VALIDATION
-  // ------------------------------------------------------------
-  const parseResult = EditCommandSchema.safeParse(rawCommand);
-  if (!parseResult.success) {
-    return {
-      valid: false,
-      error: {
-        code: "SCHEMA_VALIDATION_FAILED",
-        message: "Command payload failed runtime schema validation.",
-        details: parseResult.error.flatten(),
-      },
-    };
-  }
+function clone<T>(value: T): T { return structuredClone(value); }
+function nowMeta() { const now = new Date(); return { timestamp: now.toISOString(), displayTime: now.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }) }; }
+function kindForSource(source: EditCommand["source"]): RevisionEntry["kind"] { return source === "ai_assistant" ? "ai" : source === "history_restore" ? "restore" : "manual"; }
 
-  const command = parseResult.data as EditCommand;
-
-  // ------------------------------------------------------------
-  // TIER 2: BUSINESS RULES VALIDATION
-  // ------------------------------------------------------------
-
-  // 1. Empty / No-op Command Check
-  const hasGlobalContent = command.changes.content !== undefined;
-  const hasGlobalStyleProps =
-    command.changes.styleProps !== undefined &&
-    Object.keys(command.changes.styleProps).length > 0;
-  const hasPatches =
-    command.changes.patches !== undefined &&
-    Object.keys(command.changes.patches).length > 0;
-  const hasReorder = command.changes.reorder !== undefined;
-
-  if (!hasGlobalContent && !hasGlobalStyleProps && !hasPatches && !hasReorder) {
-    return {
-      valid: false,
-      error: {
-        code: "NO_CHANGES",
-        message: "Command contains no property, content, or structural changes.",
-      },
-    };
-  }
-
-  // 2. Base Revision Check (Stale Revision Guard)
-  if (command.baseRevision !== model.revision) {
-    return {
-      valid: false,
-      error: {
-        code: "STALE_REVISION",
-        message: `Command baseRevision (${command.baseRevision}) does not match current model revision (${model.revision}).`,
-        details: { currentRevision: model.revision, commandRevision: command.baseRevision },
-      },
-    };
-  }
-
-  // 3. Duplicate Target IDs Rejection
-  const uniqueTargets = new Set(command.targetIds);
-  if (uniqueTargets.size !== command.targetIds.length) {
-    return {
-      valid: false,
-      error: {
-        code: "DUPLICATE_TARGET_IDS",
-        message: "Duplicate target element IDs in a single command are not permitted.",
-        details: { targetIds: command.targetIds },
-      },
-    };
-  }
-
-  // 4. Content Scope Rule: Content changes are template-wide and require scope: "all"
-  const anyContentChange =
-    hasGlobalContent ||
-    (hasPatches &&
-      Object.values(command.changes.patches!).some((p) => p.content !== undefined));
-
-  if (anyContentChange && command.scope !== "all") {
-    return {
-      valid: false,
-      error: {
-        code: "INVALID_SCOPE_FOR_CONTENT",
-        message: `Content edits must have scope "all". Single-viewport scope "${command.scope}" is not permitted for content.`,
-        details: { attemptedScope: command.scope },
-      },
-    };
-  }
-
-  // 5. Reorder Scope Rule: Reorder structural changes are template-wide and require scope: "all"
-  if (hasReorder && command.scope !== "all") {
-    return {
-      valid: false,
-      error: {
-        code: "INVALID_SCOPE_FOR_REORDER",
-        message: `Structural reorder edits must have scope "all". Single-viewport scope "${command.scope}" is not permitted for reorder.`,
-        details: { attemptedScope: command.scope },
-      },
-    };
-  }
-
-  // 6. Target Existence (Atomicity Guard: All targets must exist)
-  const existingNodeIds = getAllNodeIds(model.elements, model.templateId);
-
-  for (const targetId of command.targetIds) {
-    if (!existingNodeIds.has(targetId)) {
-      return {
-        valid: false,
-        error: {
-          code: "TARGET_NOT_FOUND",
-          message: `Target element ID "${targetId}" was not found in the template model.`,
-          details: { missingId: targetId },
-        },
-      };
-    }
-  }
-
-  // 7. Element Property Applicability Check
-  for (const targetId of command.targetIds) {
-    if (targetId === model.templateId) continue;
-    const node = findNodeById(model.elements, targetId);
-    if (!node) continue;
-    const targetStyleProps = command.changes.patches?.[targetId]?.styleProps ?? command.changes.styleProps;
-    if (targetStyleProps) {
-      const applicabilityError = validatePropertyApplicability(node.kind, targetStyleProps);
-      if (applicabilityError) {
-        return {
-          valid: false,
-          error: applicabilityError,
-        };
-      }
-    }
-  }
-
-  // 8. Reorder Bounds Check
-  if (hasReorder && command.changes.reorder) {
-    const { parentId, sourceIndex, targetIndex } = command.changes.reorder;
-    let count = 0;
-
-    if (parentId === model.templateId) {
-      count = model.elements.length;
-    } else {
-      const parentNode = findNodeById(model.elements, parentId);
-      if (!parentNode || !parentNode.children || parentNode.children.length === 0) {
-        return {
-          valid: false,
-          error: {
-            code: "INVALID_REORDER",
-            message: `Reorder parent container "${parentId}" does not exist or has no children.`,
-          },
-        };
-      }
-      count = parentNode.children.length;
-    }
-
-    if (sourceIndex < 0 || sourceIndex >= count || targetIndex < 0 || targetIndex >= count) {
-      return {
-        valid: false,
-        error: {
-          code: "INVALID_REORDER",
-          message: `Reorder index out of bounds: sourceIndex ${sourceIndex}, targetIndex ${targetIndex}, total children ${count}.`,
-        },
-      };
-    }
-  }
-
-  return {
-    valid: true,
-    command,
-  };
+function styleSnapshot(node: ElementNode, scope: EditCommand["scope"]): Partial<ElementStyleProps> {
+  return scope === "all" ? { ...node.baseProps } : { ...(node.overrides[scope as Viewport] ?? {}) };
 }
 
-/**
- * Applies a pre-validated EditCommand immutably and returns the next TemplateModel and RevisionEntries.
- * Assumes command has already passed validateEditCommand.
- */
-export function applyEditCommand(
-  model: TemplateModel,
-  command: EditCommand
-): { nextModel: TemplateModel; historyEntries: RevisionEntry[] } {
-  let nextElements = model.elements;
-  const historyEntries: RevisionEntry[] = [];
-  const nextRevision = model.revision + 1;
-  const now = new Date();
-  const timestamp = now.toISOString();
-  const displayTime = now.toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+function patchForExactStyle(before: Partial<ElementStyleProps>, after: Partial<ElementStyleProps>): Partial<ElementStyleProps> {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)] as (keyof ElementStyleProps)[]);
+  const patch: Partial<ElementStyleProps> = {};
+  for (const key of keys) (patch as Record<string, unknown>)[key] = key in before ? before[key] : undefined;
+  return patch;
+}
 
-  const hasGlobalContent = command.changes.content !== undefined;
-  const hasGlobalStyleProps =
-    command.changes.styleProps !== undefined &&
-    Object.keys(command.changes.styleProps).length > 0;
-  const hasPatches =
-    command.changes.patches !== undefined &&
-    Object.keys(command.changes.patches).length > 0;
+export function validateEditCommand(model: TemplateModel, rawCommand: unknown): { valid: true; command: EditCommand } | { valid: false; error: ValidationError } {
+  const parsed = EditCommandSchema.safeParse(rawCommand);
+  if (!parsed.success) return { valid: false, error: { code: "SCHEMA_VALIDATION_FAILED", message: "Command payload failed runtime schema validation.", details: parsed.error.flatten() } };
+  const command = parsed.data as EditCommand;
+  if (!isMeaningfulChange(command)) return { valid: false, error: { code: "NO_CHANGES", message: "Command contains no effective changes." } };
+  if (command.baseRevision !== model.revision) return { valid: false, error: { code: "STALE_REVISION", message: `Command revision ${command.baseRevision} does not match current revision ${model.revision}.`, details: { currentRevision: model.revision } } };
+  if (new Set(command.targetIds).size !== command.targetIds.length) return { valid: false, error: { code: "DUPLICATE_TARGET_IDS", message: "Duplicate target IDs are not permitted." } };
+  const ids = getAllNodeIds(model.elements, model.templateId);
+  for (const id of command.targetIds) if (!ids.has(id)) return { valid: false, error: { code: "TARGET_NOT_FOUND", message: `Target element ID "${id}" was not found.` } };
+  const patchIds = command.changes.patches ? Object.keys(command.changes.patches) : [];
+  if (patchIds.some((id) => !command.targetIds.includes(id))) return { valid: false, error: { code: "INVALID_COMMAND_TARGETS", message: "Patch keys must be a subset of targetIds." } };
+  if (patchIds.length > 0 && patchIds.length !== command.targetIds.length) return { valid: false, error: { code: "INVALID_COMMAND_TARGETS", message: "Patch commands must provide a patch for every target." } };
 
-  // 1. Handle Content and Style Property Modifications on Targets
-  if (hasGlobalContent || hasGlobalStyleProps || hasPatches) {
-    for (const targetId of command.targetIds) {
-      if (targetId === model.templateId) continue;
-      const existingNode = findNodeById(model.elements, targetId);
-      if (!existingNode) continue;
+  const hasContent = command.changes.content !== undefined || patchIds.some((id) => command.changes.patches?.[id]?.content !== undefined);
+  if (hasContent && command.scope !== "all") return { valid: false, error: { code: "INVALID_SCOPE_FOR_CONTENT", message: "Content changes must use scope all." } };
+  if (command.changes.reorder && command.scope !== "all") return { valid: false, error: { code: "INVALID_SCOPE_FOR_REORDER", message: "Structural reordering must use scope all." } };
+  if (command.scope === "desktop" && command.source !== "history_restore") return { valid: false, error: { code: "SCHEMA_VALIDATION_FAILED", message: "Desktop edits use the base/all scope; desktop overrides are not supported." } };
 
-      const targetPatch = command.changes.patches?.[targetId];
-      const targetContent = targetPatch?.content !== undefined ? targetPatch.content : command.changes.content;
-      const targetStyleProps = targetPatch?.styleProps !== undefined ? targetPatch.styleProps : command.changes.styleProps;
-
-      // Skip if this specific target has no changes
-      if (targetContent === undefined && (!targetStyleProps || Object.keys(targetStyleProps).length === 0)) {
-        continue;
-      }
-
-      // Capture before state for history delta
-      const beforeState = {
-        content: existingNode.content,
-        props:
-          command.scope === "all"
-            ? { ...existingNode.baseProps }
-            : { ...(existingNode.overrides[command.scope as Viewport] || {}) },
-      };
-
-      // Apply transformation immutably
-      nextElements = mapNodeTree(nextElements, targetId, (node) => {
-        const updatedNode: ElementNode = {
-          ...node,
-          version: node.version + 1,
-        };
-
-        // Content change (template-wide)
-        if (targetContent !== undefined) {
-          updatedNode.content = targetContent;
-        }
-
-        // Style property changes according to scope
-        if (targetStyleProps && Object.keys(targetStyleProps).length > 0) {
-          if (command.scope === "all") {
-            const nextBase: ElementStyleProps = { ...updatedNode.baseProps };
-            for (const [k, v] of Object.entries(targetStyleProps)) {
-              if (v === undefined || v === null) {
-                delete (nextBase as Record<string, unknown>)[k];
-              } else {
-                (nextBase as Record<string, unknown>)[k] = v;
-              }
-            }
-            updatedNode.baseProps = nextBase;
-          } else {
-            const vp = command.scope as Viewport;
-            const currentOverride = { ...(updatedNode.overrides[vp] || {}) };
-
-            for (const [k, v] of Object.entries(targetStyleProps)) {
-              if (v === undefined || v === null) {
-                delete (currentOverride as Record<string, unknown>)[k];
-              } else {
-                (currentOverride as Record<string, unknown>)[k] = v;
-              }
-            }
-
-            const updatedOverrides = { ...updatedNode.overrides };
-            if (Object.keys(currentOverride).length > 0) {
-              updatedOverrides[vp] = currentOverride;
-            } else {
-              delete updatedOverrides[vp];
-            }
-            updatedNode.overrides = updatedOverrides;
-          }
-        }
-
-        return updatedNode;
-      });
-
-      const updatedNode = findNodeById(nextElements, targetId)!;
-      const afterState = {
-        content: updatedNode.content,
-        props:
-          command.scope === "all"
-            ? { ...updatedNode.baseProps }
-            : { ...(updatedNode.overrides[command.scope as Viewport] || {}) },
-      };
-
-      historyEntries.push({
-        revisionId: `rev_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${targetId}`,
-        timestamp,
-        displayTime,
-        kind:
-          command.source === "ai_assistant"
-            ? "ai"
-            : command.source === "history_restore"
-            ? "restore"
-            : "manual",
-        source: command.source,
-        elementId: targetId,
-        elementName: existingNode.name,
-        scope: command.scope,
-        propertyKey:
-          targetContent !== undefined && targetStyleProps !== undefined
-            ? "all"
-            : targetContent !== undefined
-            ? "content"
-            : "style",
-        beforeState,
-        afterState,
-        globalRevision: nextRevision,
-      });
-    }
+  for (const id of command.targetIds) {
+    if (id === model.templateId) continue;
+    const node = findNodeById(model.elements, id); if (!node) continue;
+    const props = command.changes.patches?.[id]?.styleProps ?? command.changes.styleProps;
+    if (props) { const err = validatePropertyApplicability(node.kind, props); if (err) return { valid: false, error: err }; }
   }
 
-  // 2. Handle Structural Reordering if requested
   if (command.changes.reorder) {
-    const { parentId, sourceIndex, targetIndex } = command.changes.reorder;
-    const parentName = parentId === model.templateId ? model.templateName : findNodeById(nextElements, parentId)?.name || parentId;
+    const { parentId, sourceIndex, targetIndex, order } = command.changes.reorder;
+    const siblings = parentId === model.templateId ? model.elements : findNodeById(model.elements, parentId)?.children;
+    if (!siblings) return { valid: false, error: { code: "INVALID_REORDER", message: "Reorder parent does not exist." } };
+    if (order) {
+      const existing = siblings.map((node) => node.id);
+      if (order.length !== existing.length || new Set(order).size !== existing.length || order.some((id) => !existing.includes(id))) return { valid: false, error: { code: "INVALID_REORDER", message: "Exact reorder order must be a permutation of the parent's current children." } };
+    } else if (sourceIndex === undefined || targetIndex === undefined || sourceIndex >= siblings.length || targetIndex >= siblings.length || sourceIndex === targetIndex) {
+      return { valid: false, error: { code: "INVALID_REORDER", message: "Invalid sibling reorder indices." } };
+    }
+  }
+  return { valid: true, command };
+}
 
-    nextElements = reorderChildren(nextElements, parentId, sourceIndex, targetIndex, model.templateId);
+export function applyEditCommand(model: TemplateModel, command: EditCommand): { nextModel: TemplateModel; historyEntries: RevisionEntry[] } {
+  const { timestamp, displayTime } = nowMeta();
+  const nextRevision = model.revision + 1;
+  let nextElements = model.elements;
+  const entries: RevisionEntry[] = [];
 
-    historyEntries.push({
-      revisionId: `rev_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${parentId}`,
-      timestamp,
-      displayTime,
-      kind:
-        command.source === "ai_assistant"
-          ? "ai"
-          : command.source === "history_restore"
-          ? "restore"
-          : "manual",
-      source: command.source,
-      elementId: parentId,
-      elementName: parentName,
-      scope: command.scope,
-      propertyKey: "structure",
-      beforeState: {},
-      afterState: {},
-      globalRevision: nextRevision,
+  for (const id of command.targetIds) {
+    if (id === model.templateId) continue;
+    const node = findNodeById(nextElements, id); if (!node) continue;
+    const patch = command.changes.patches?.[id];
+    const content = patch?.content !== undefined ? patch.content : command.changes.content;
+    const styleProps = patch?.styleProps ?? command.changes.styleProps;
+    if (content === undefined && (!styleProps || Object.keys(styleProps).length === 0)) continue;
+    const beforeContent = node.content;
+    const beforeProps = styleSnapshot(node, command.scope);
+    nextElements = mapNodeTree(nextElements, id, (current) => {
+      const updated: ElementNode = { ...current, version: current.version + 1 };
+      if (content !== undefined) updated.content = content;
+      if (styleProps && Object.keys(styleProps).length) {
+        if (command.scope === "all") {
+          const next = { ...updated.baseProps } as Record<string, unknown>;
+          for (const [key, value] of Object.entries(styleProps)) { if (value === undefined) delete next[key]; else next[key] = value; }
+          updated.baseProps = next as ElementStyleProps;
+        } else {
+          const vp = command.scope as Viewport;
+          const currentOverride = { ...(updated.overrides[vp] ?? {}) } as Record<string, unknown>;
+          for (const [key, value] of Object.entries(styleProps)) { if (value === undefined) delete currentOverride[key]; else currentOverride[key] = value; }
+          updated.overrides = { ...updated.overrides, [vp]: currentOverride };
+        }
+      }
+      return updated;
+    });
+    const afterNode = findNodeById(nextElements, id)!;
+    const afterContent = afterNode.content;
+    const afterProps = styleSnapshot(afterNode, command.scope);
+    const hasStyleChange = !!styleProps && Object.keys(styleProps).length > 0;
+    const propertyKey = content !== undefined && hasStyleChange ? "all" : content !== undefined ? "content" : "style";
+    entries.push({
+      revisionId: `${nextRevision}-${id}-${entries.length}`,
+      timestamp, displayTime, kind: kindForSource(command.source), source: command.source,
+      elementId: id, elementName: node.name, scope: command.scope, propertyKey,
+      beforeState: { content: beforeContent, props: beforeProps },
+      afterState: { content: afterContent, props: afterProps }, globalRevision: nextRevision,
     });
   }
 
-  const nextModel: TemplateModel = {
-    ...model,
-    revision: nextRevision,
-    updatedAt: timestamp,
-    elements: nextElements,
-  };
-
-  return { nextModel, historyEntries };
-}
-
-/**
- * MASTER TRANSACTION ENTRYPOINT:
- * Validates, calculates next state and history atomically, and returns a CommitResult.
- */
-export function executeCommit(
-  model: TemplateModel,
-  rawCommand: unknown
-): CommitResult {
-  const validation = validateEditCommand(model, rawCommand);
-  if (!validation.valid) {
-    return {
-      success: false,
-      error: validation.error,
-    };
+  if (command.changes.reorder) {
+    const { parentId, sourceIndex, targetIndex, order } = command.changes.reorder;
+    const siblings = parentId === model.templateId ? model.elements : findNodeById(model.elements, parentId)?.children ?? [];
+    const beforeOrder = siblings.map((n) => n.id);
+    const movedElementId = sourceIndex !== undefined ? (siblings[sourceIndex]?.id ?? "") : "";
+    if (order) {
+      const reorderToExactOrder = (nodes: ElementNode[]): ElementNode[] => {
+        if (parentId === model.templateId) { const byId = new Map(nodes.map((n) => [n.id, n])); return order.map((id) => byId.get(id)!).filter(Boolean); }
+        return mapNodeTree(nodes, parentId, (parent) => { const byId = new Map((parent.children ?? []).map((n) => [n.id, n])); return { ...parent, children: order.map((id) => byId.get(id)!).filter(Boolean) }; });
+      };
+      nextElements = reorderToExactOrder(nextElements);
+    } else {
+      nextElements = reorderChildren(nextElements, parentId, sourceIndex!, targetIndex!);
+    }
+    const nextSiblings = parentId === model.templateId ? nextElements : findNodeById(nextElements, parentId)?.children ?? [];
+    const afterOrder = nextSiblings.map((n) => n.id);
+    const afterIndex = movedElementId ? afterOrder.indexOf(movedElementId) : (targetIndex ?? 0);
+    entries.push({ revisionId: `${nextRevision}-structure`, timestamp, displayTime, kind: kindForSource(command.source), source: command.source, elementId: parentId, elementName: parentId === model.templateId ? model.templateName : (findNodeById(model.elements, parentId)?.name ?? "Container"), scope: "all", propertyKey: "structure", beforeState: {}, afterState: {}, globalRevision: nextRevision, structure: { parentId, movedElementId, beforeOrder, afterOrder, beforeIndex: sourceIndex ?? beforeOrder.indexOf(movedElementId), afterIndex, } });
   }
 
-  const { nextModel, historyEntries } = applyEditCommand(model, validation.command);
+  if (entries.length === 0) return { nextModel: model, historyEntries: [] };
+  const nextModel: TemplateModel = { ...model, revision: nextRevision, updatedAt: timestamp, elements: nextElements };
+  return { nextModel, historyEntries: entries };
+}
 
-  return {
-    success: true,
-    model: nextModel,
-    historyEntries,
-  };
+export function executeCommit(model: TemplateModel, rawCommand: unknown): CommitResult {
+  const validated = validateEditCommand(model, rawCommand);
+  if (!validated.valid) return { success: false, error: validated.error };
+  const { nextModel, historyEntries } = applyEditCommand(model, validated.command);
+  if (historyEntries.length === 0) return { success: false, error: { code: "NO_CHANGES", message: "Command produced no state changes." } };
+  return { success: true, model: clone(nextModel), historyEntries: clone(historyEntries) };
+}
+
+export function createPropertyRestorePatch(before: Partial<ElementStyleProps>, current: Partial<ElementStyleProps>): Partial<ElementStyleProps> {
+  return patchForExactStyle(before, current);
 }

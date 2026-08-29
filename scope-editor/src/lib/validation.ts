@@ -1,327 +1,111 @@
 import { z } from "zod";
-import type { ElementKind, ElementNode, ElementStyleProps, TemplateModel, ValidationError } from "./types";
-
-// ============================================================
-// TIER 1: ZOD RUNTIME SCHEMA DEFINITIONS
-// ============================================================
+import type { ElementKind, ElementNode, ElementStyleProps, TemplateModel, ValidationError, EditCommand } from "./types";
 
 export const ViewportSchema = z.enum(["desktop", "tablet", "mobile"]);
 export const ScopeSchema = z.enum(["all", "desktop", "tablet", "mobile"]);
-export const EditSourceSchema = z.enum([
-  "canvas",
-  "inspector",
-  "code_editor",
-  "ai_assistant",
-  "history_restore",
-]);
+export const EditSourceSchema = z.enum(["canvas", "inspector", "code_editor", "ai_assistant", "history_restore"]);
 
-export const ElementStylePropsSchema = z
-  .object({
-    fontFamily: z.string().optional(),
-    fontWeight: z
-      .union([
-        z.literal(300),
-        z.literal(400),
-        z.literal(500),
-        z.literal(600),
-        z.literal(700),
-        z.literal(800),
-      ])
-      .optional(),
-    fontSize: z.number().min(8).max(160).optional(),
-    lineHeight: z.number().min(0.5).max(3.0).optional(),
-    letterSpacing: z.number().min(-5).max(20).optional(),
-    textAlign: z.enum(["left", "center", "right", "justify"]).optional(),
-    color: z.string().optional(),
-    backgroundColor: z.string().optional(),
-    marginTop: z.number().optional(),
-    marginBottom: z.number().optional(),
-    paddingTop: z.number().min(0).optional(),
-    paddingBottom: z.number().min(0).optional(),
-    paddingLeft: z.number().min(0).optional(),
-    paddingRight: z.number().min(0).optional(),
-    width: z.union([z.number(), z.literal("auto"), z.literal("100%")]).optional(),
-    height: z.union([z.number(), z.literal("auto")]).optional(),
-    borderRadius: z.number().min(0).max(100).optional(),
-    borderWidth: z.number().min(0).max(20).optional(),
-    borderColor: z.string().optional(),
-    opacity: z.number().min(0).max(1).optional(),
-    display: z.enum(["flex", "block", "grid", "none"]).optional(),
-    flexDirection: z.enum(["row", "column"]).optional(),
-    gap: z.number().min(0).optional(),
-    alignItems: z.enum(["flex-start", "center", "flex-end", "stretch"]).optional(),
-    justifyContent: z
-      .enum(["flex-start", "center", "flex-end", "space-between"])
-      .optional(),
-  })
-  .strict(); // Rejects unwhitelisted style fields at schema boundary
+export const ElementStylePropsSchema = z.object({
+  fontFamily: z.string().min(1).optional(),
+  fontWeight: z.union([z.literal(300), z.literal(400), z.literal(500), z.literal(600), z.literal(700), z.literal(800)]).optional(),
+  fontSize: z.number().finite().min(8).max(160).optional(),
+  lineHeight: z.number().finite().min(0.5).max(3).optional(),
+  letterSpacing: z.number().finite().min(-5).max(20).optional(),
+  textAlign: z.enum(["left", "center", "right", "justify"]).optional(),
+  color: z.string().regex(/^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/).optional(),
+  backgroundColor: z.string().regex(/^(?:transparent|#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8}))$/).optional(),
+  marginTop: z.number().finite().min(-1000).max(1000).optional(),
+  marginBottom: z.number().finite().min(-1000).max(1000).optional(),
+  paddingTop: z.number().finite().min(0).max(1000).optional(),
+  paddingBottom: z.number().finite().min(0).max(1000).optional(),
+  paddingLeft: z.number().finite().min(0).max(1000).optional(),
+  paddingRight: z.number().finite().min(0).max(1000).optional(),
+  width: z.union([z.number().finite().min(0).max(100), z.literal("auto"), z.literal("100%")]).optional(),
+  height: z.union([z.number().finite().min(0).max(2000), z.literal("auto")]).optional(),
+  borderRadius: z.number().finite().min(0).max(100).optional(),
+  borderWidth: z.number().finite().min(0).max(20).optional(),
+  borderColor: z.string().regex(/^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/).optional(),
+  opacity: z.number().finite().min(0).max(1).optional(),
+  display: z.enum(["flex", "block", "grid", "none"]).optional(),
+  flexDirection: z.enum(["row", "column"]).optional(),
+  gap: z.number().finite().min(0).max(500).optional(),
+  alignItems: z.enum(["flex-start", "center", "flex-end", "stretch"]).optional(),
+  justifyContent: z.enum(["flex-start", "center", "flex-end", "space-between"]).optional(),
+}).strict();
 
-export const ElementPatchSchema = z
-  .object({
-    content: z.string().optional(),
-    styleProps: ElementStylePropsSchema.optional(),
-  })
-  .strict();
+export const ElementPatchSchema = z.object({ content: z.string().optional(), styleProps: ElementStylePropsSchema.optional() }).strict();
 
-export const EditCommandSchema = z
-  .object({
-    commandId: z.string().min(1),
-    source: EditSourceSchema,
-    targetIds: z
-      .array(z.string().min(1))
-      .min(1, "At least one target element ID required"),
-    scope: ScopeSchema,
-    baseRevision: z.number().int().nonnegative(),
-    changes: z
-      .object({
-        content: z.string().optional(),
-        styleProps: ElementStylePropsSchema.optional(),
-        patches: z.record(ElementPatchSchema).optional(),
-        reorder: z
-          .object({
-            parentId: z.string().min(1),
-            sourceIndex: z.number().int().nonnegative(),
-            targetIndex: z.number().int().nonnegative(),
-          })
-          .optional(),
-      })
-      .strict(),
-    metadata: z
-      .object({
-        prompt: z.string().optional(),
-        description: z.string().optional(),
-      })
-      .optional(),
-  })
-  .strict();
+export const EditCommandSchema = z.object({
+  commandId: z.string().min(1), source: EditSourceSchema, targetIds: z.array(z.string().min(1)).min(1),
+  scope: ScopeSchema, baseRevision: z.number().int().nonnegative(),
+  changes: z.object({
+    content: z.string().optional(), styleProps: ElementStylePropsSchema.optional(),
+    patches: z.record(ElementPatchSchema).optional(),
+    reorder: z.object({ parentId: z.string().min(1), sourceIndex: z.number().int().nonnegative().optional(), targetIndex: z.number().int().nonnegative().optional(), order: z.array(z.string().min(1)).optional() }).strict().optional(),
+  }).strict(),
+  metadata: z.object({ prompt: z.string().optional(), description: z.string().optional() }).optional(),
+}).strict();
 
-// ============================================================
-// TIER 2: BUSINESS RULES & MODEL INTEGRITY
-// ============================================================
+const COMMON_TEXT = ["fontFamily", "fontWeight", "fontSize", "lineHeight", "letterSpacing", "textAlign", "color", "marginTop", "marginBottom", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "opacity", "display"] as const;
+const LAYOUT = ["display", "flexDirection", "gap", "alignItems", "justifyContent", "backgroundColor", "borderRadius", "borderWidth", "borderColor", "marginTop", "marginBottom", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "width", "height", "opacity", "textAlign"] as const;
+const BUTTON = [...COMMON_TEXT, "backgroundColor", "borderRadius", "borderWidth", "borderColor", "width", "height"] as const;
+const IMAGE = ["width", "height", "borderRadius", "borderWidth", "borderColor", "marginTop", "marginBottom", "opacity", "display"] as const;
 
-const ALLOWED_PROPERTIES_BY_KIND: Record<ElementKind, (keyof ElementStyleProps)[]> = {
-  text: [
-    "fontFamily",
-    "fontWeight",
-    "fontSize",
-    "lineHeight",
-    "letterSpacing",
-    "textAlign",
-    "color",
-    "backgroundColor",
-    "marginTop",
-    "marginBottom",
-    "paddingTop",
-    "paddingBottom",
-    "paddingLeft",
-    "paddingRight",
-    "opacity",
-    "display",
-  ],
-  button: [
-    "fontFamily",
-    "fontWeight",
-    "fontSize",
-    "lineHeight",
-    "letterSpacing",
-    "textAlign",
-    "color",
-    "backgroundColor",
-    "borderRadius",
-    "borderWidth",
-    "borderColor",
-    "marginTop",
-    "marginBottom",
-    "paddingTop",
-    "paddingBottom",
-    "paddingLeft",
-    "paddingRight",
-    "width",
-    "height",
-    "opacity",
-    "display",
-  ],
-  link: [
-    "fontFamily",
-    "fontWeight",
-    "fontSize",
-    "lineHeight",
-    "letterSpacing",
-    "textAlign",
-    "color",
-    "backgroundColor",
-    "marginTop",
-    "marginBottom",
-    "paddingTop",
-    "paddingBottom",
-    "paddingLeft",
-    "paddingRight",
-    "opacity",
-    "display",
-  ],
-  image: [
-    "width",
-    "height",
-    "borderRadius",
-    "borderWidth",
-    "borderColor",
-    "marginTop",
-    "marginBottom",
-    "opacity",
-    "display",
-  ],
-  container: [
-    "display",
-    "flexDirection",
-    "gap",
-    "alignItems",
-    "justifyContent",
-    "backgroundColor",
-    "borderRadius",
-    "borderWidth",
-    "borderColor",
-    "marginTop",
-    "marginBottom",
-    "paddingTop",
-    "paddingBottom",
-    "paddingLeft",
-    "paddingRight",
-    "width",
-    "height",
-    "opacity",
-  ],
-  section: [
-    "backgroundColor",
-    "paddingTop",
-    "paddingBottom",
-    "paddingLeft",
-    "paddingRight",
-    "marginTop",
-    "marginBottom",
-    "borderWidth",
-    "borderColor",
-    "display",
-    "flexDirection",
-    "gap",
-    "alignItems",
-    "justifyContent",
-    "textAlign",
-  ],
-  card: [
-    "backgroundColor",
-    "borderRadius",
-    "borderWidth",
-    "borderColor",
-    "paddingTop",
-    "paddingBottom",
-    "paddingLeft",
-    "paddingRight",
-    "marginTop",
-    "marginBottom",
-    "width",
-    "height",
-    "display",
-    "flexDirection",
-    "gap",
-    "opacity",
-  ],
-  input: [
-    "fontFamily",
-    "fontSize",
-    "color",
-    "backgroundColor",
-    "borderRadius",
-    "borderWidth",
-    "borderColor",
-    "paddingTop",
-    "paddingBottom",
-    "paddingLeft",
-    "paddingRight",
-    "marginTop",
-    "marginBottom",
-    "width",
-    "height",
-  ],
+const ALLOWED_PROPERTIES_BY_KIND: Record<ElementKind, readonly (keyof ElementStyleProps)[]> = {
+  text: COMMON_TEXT,
+  link: COMMON_TEXT,
+  button: BUTTON,
+  image: IMAGE,
+  section: LAYOUT,
+  container: LAYOUT,
+  card: LAYOUT,
+  input: BUTTON,
 };
 
-/**
- * Validates that all style properties in styleProps are applicable for the given element kind.
- */
-export function validatePropertyApplicability(
-  kind: ElementKind,
-  styleProps?: Partial<ElementStyleProps>
-): ValidationError | null {
-  if (!styleProps) return null;
+export function validatePropertyApplicability(kind: ElementKind, styleProps: Partial<ElementStyleProps>): ValidationError | null {
+  const allowed = new Set(ALLOWED_PROPERTIES_BY_KIND[kind] ?? []);
+  const invalid = Object.keys(styleProps).filter((key) => !allowed.has(key as keyof ElementStyleProps));
+  if (invalid.length === 0) return null;
+  return { code: "INCOMPATIBLE_PROPERTY_FOR_ELEMENT", message: `Property ${invalid.join(", ")} is not allowed on element kind ${kind}.`, details: { kind, invalid } };
+}
 
-  const allowed = new Set(ALLOWED_PROPERTIES_BY_KIND[kind] || []);
-  const attemptedKeys = Object.keys(styleProps) as (keyof ElementStyleProps)[];
+function collectNodes(nodes: ElementNode[], out: ElementNode[] = []): ElementNode[] {
+  for (const node of nodes) { out.push(node); if (node.children) collectNodes(node.children, out); }
+  return out;
+}
 
-  for (const key of attemptedKeys) {
-    if (styleProps[key] !== undefined && !allowed.has(key)) {
-      return {
-        code: "INCOMPATIBLE_PROPERTY_FOR_ELEMENT",
-        message: `Property "${key}" is not applicable to element of kind "${kind}".`,
-        details: { kind, invalidProperty: key, allowedProperties: Array.from(allowed) },
-      };
+export function validateTemplateModel(model: TemplateModel): ValidationError | null {
+  if (!model || typeof model !== "object" || !model.templateId || !model.templateName || !model.schemaVersion || !Array.isArray(model.elements)) {
+    return { code: "INVALID_TEMPLATE_MODEL", message: "TemplateModel is missing required fields." };
+  }
+  if (model.schemaVersion !== "1.0.0") return { code: "INVALID_TEMPLATE_MODEL", message: `Unsupported schemaVersion ${model.schemaVersion}.` };
+  if (!Number.isInteger(model.revision) || model.revision < 0) return { code: "INVALID_TEMPLATE_MODEL", message: "Model revision must be a non-negative integer." };
+  const nodes = collectNodes(model.elements);
+  const ids = new Set<string>();
+  for (const node of nodes) {
+    if (!node.id || ids.has(node.id)) return { code: "INVALID_TEMPLATE_MODEL", message: `Element ID "${node.id}" is missing or duplicated.` };
+    ids.add(node.id);
+    if (!ALLOWED_PROPERTIES_BY_KIND[node.kind]) return { code: "INVALID_TEMPLATE_MODEL", message: `Unsupported element kind "${node.kind}".` };
+    const parsed = ElementStylePropsSchema.safeParse(node.baseProps);
+    if (!parsed.success) return { code: "INVALID_TEMPLATE_MODEL", message: `Invalid baseProps for ${node.id}.`, details: parsed.error.flatten() };
+    for (const vp of ["desktop", "tablet", "mobile"] as const) {
+      const props = node.overrides?.[vp];
+      if (props) {
+        const result = ElementStylePropsSchema.safeParse(props);
+        if (!result.success) return { code: "INVALID_TEMPLATE_MODEL", message: `Invalid ${vp} overrides for ${node.id}.`, details: result.error.flatten() };
+        const applicability = validatePropertyApplicability(node.kind, props);
+        if (applicability) return { code: "INVALID_TEMPLATE_MODEL", message: applicability.message };
+      }
     }
   }
-
   return null;
 }
 
-/**
- * Validates the structural integrity of a TemplateModel, ensuring unique element IDs and schema compliance.
- */
-export function validateTemplateModel(model: TemplateModel): ValidationError | null {
-  if (!model || typeof model !== "object") {
-    return {
-      code: "INVALID_TEMPLATE_MODEL",
-      message: "Template model must be a non-null object.",
-    };
-  }
-
-  if (model.schemaVersion !== "1.0.0") {
-    return {
-      code: "INVALID_TEMPLATE_MODEL",
-      message: `Unsupported schemaVersion "${model.schemaVersion}". Expected "1.0.0".`,
-    };
-  }
-
-  if (!Array.isArray(model.elements) || model.elements.length === 0) {
-    return {
-      code: "INVALID_TEMPLATE_MODEL",
-      message: "Template model must contain a non-empty elements array.",
-    };
-  }
-
-  const seenIds = new Set<string>();
-  let duplicateId: string | null = null;
-
-  function traverse(nodes: ElementNode[]) {
-    for (const node of nodes) {
-      if (!node.id || typeof node.id !== "string") {
-        return;
-      }
-      if (seenIds.has(node.id)) {
-        duplicateId = node.id;
-        return;
-      }
-      seenIds.add(node.id);
-      if (node.children && Array.isArray(node.children)) {
-        traverse(node.children);
-      }
-    }
-  }
-
-  traverse(model.elements);
-
-  if (duplicateId) {
-    return {
-      code: "INVALID_TEMPLATE_MODEL",
-      message: `Duplicate element ID "${duplicateId}" detected in template model. Element IDs must be globally unique.`,
-      details: { duplicateId },
-    };
-  }
-
-  return null;
+export function isMeaningfulChange(command: EditCommand): boolean {
+  const c = command.changes;
+  if (c.content !== undefined) return true;
+  if (c.styleProps && Object.keys(c.styleProps).length > 0) return true;
+  if (c.patches && Object.values(c.patches).some((p) => p.content !== undefined || (p.styleProps && Object.keys(p.styleProps).length > 0))) return true;
+  if (c.reorder) return Array.isArray(c.reorder.order) ? c.reorder.order.length > 0 : c.reorder.sourceIndex !== undefined && c.reorder.targetIndex !== undefined && c.reorder.sourceIndex !== c.reorder.targetIndex;
+  return false;
 }

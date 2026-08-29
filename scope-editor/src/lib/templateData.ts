@@ -6,7 +6,7 @@ export const HERO_IMG =
 export const STUDIO_IMG =
   "https://images.pexels.com/photos/16307279/pexels-photo-16307279.jpeg?auto=compress&cs=tinysrgb&h=650&w=940";
 
-export const initialTemplateModel: TemplateModel = {
+const baseTemplateModel: TemplateModel = {
   templateId: "nova-studio-landing",
   templateName: "NOVA Digital Studio",
   schemaVersion: "1.0.0",
@@ -697,3 +697,28 @@ export const initialTemplateModel: TemplateModel = {
     },
   ],
 };
+
+
+function enrichSemanticTags(model: TemplateModel): TemplateModel {
+  const visit = (node: any): any => {
+    let tag: any = node.tag;
+    if (!tag) {
+      if (node.kind === "section") tag = "section";
+      else if (node.kind === "container" || node.kind === "card") tag = "div";
+      else if (node.kind === "button") tag = "button";
+      else if (node.kind === "link") tag = "a";
+      else if (node.kind === "image") tag = "img";
+      else if (node.kind === "input") tag = "input";
+      else if (node.kind === "text") {
+        const name = String(node.name).toLowerCase();
+        tag = name.includes("heading") ? "h2" : name.includes("eyebrow") || name.includes("logo") || name.includes("brand") ? "span" : "p";
+        if (name === "hero heading") tag = "h1";
+      }
+    }
+    return { ...node, tag, editable: true, children: node.children?.map(visit) };
+  };
+  return { ...model, elements: model.elements.map(visit) };
+}
+
+export const initialTemplateModel: TemplateModel = enrichSemanticTags(baseTemplateModel);
+export const TEMPLATE_MEDIA_SOURCES = [HERO_IMG, STUDIO_IMG];

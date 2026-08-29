@@ -2,77 +2,60 @@ import React from "react";
 import type { Viewport } from "../lib/types";
 import { VIEWPORT_WIDTHS } from "../lib/types";
 
-export interface CanvasFrameProps {
+interface Props {
   activeViewport: Viewport;
-  children: React.ReactNode;
   onClearSelection: () => void;
+  onCanvasClick?: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
 }
 
-export const CanvasFrame: React.FC<CanvasFrameProps> = ({
+export const CanvasFrame: React.FC<Props> = ({
   activeViewport,
-  children,
   onClearSelection,
+  onCanvasClick,
+  children,
 }) => {
-  const isDesktop = activeViewport === "desktop";
-  const isTablet = activeViewport === "tablet";
-  const isMobile = activeViewport === "mobile";
-
-  const targetWidth = VIEWPORT_WIDTHS[activeViewport];
+  const width =
+    activeViewport === "desktop"
+      ? "min(100%, 1440px)"
+      : `${VIEWPORT_WIDTHS[activeViewport]}px`;
 
   return (
     <div
-      className="flex-1 w-full h-full overflow-auto bg-zinc-100/90 dark:bg-zinc-950 p-4 md:p-8 flex justify-center items-start transition-colors select-none"
-      onClick={onClearSelection}
+      className="w-full h-full flex-1 overflow-y-auto overflow-x-auto bg-[#efede8] p-6 select-auto"
+      onClick={onCanvasClick}
+      style={{ WebkitOverflowScrolling: "touch" }}
     >
-      <div
-        className={`transition-all duration-300 ease-out origin-top flex flex-col items-center ${
-          isDesktop
-            ? "w-full max-w-[1440px] shadow-sm rounded-none border border-zinc-200/80 dark:border-zinc-800/80"
-            : isTablet
-            ? "w-[768px] shadow-2xl rounded-2xl border-4 border-zinc-800 bg-zinc-800 my-4"
-            : "w-[375px] shadow-2xl rounded-3xl border-8 border-zinc-800 bg-zinc-800 my-4"
-        }`}
-        style={{
-          width: isDesktop ? "100%" : `${targetWidth}px`,
-          maxWidth: isDesktop ? "1440px" : undefined,
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Device Frame Notch / Top Bezel for Mobile & Tablet */}
-        {isMobile && (
-          <div className="w-full h-5 bg-zinc-800 flex items-center justify-center shrink-0 select-none">
-            <div className="w-16 h-3 bg-zinc-900 rounded-full flex items-center justify-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-zinc-800" />
-              <div className="w-6 h-1 rounded-full bg-zinc-800" />
-            </div>
-          </div>
-        )}
-
-        {isTablet && (
-          <div className="w-full h-3 bg-zinc-800 flex items-center justify-center shrink-0 select-none">
-            <div className="w-1.5 h-1.5 rounded-full bg-zinc-700" />
-          </div>
-        )}
-
-        {/* Content Viewport Frame */}
+      <div className="min-h-full flex justify-center items-start pb-24">
         <div
-          className={`w-full overflow-hidden bg-white text-zinc-900 ${
-            isMobile
-              ? "rounded-2xl min-h-[667px]"
-              : isTablet
-              ? "rounded-xl min-h-[1024px]"
-              : "min-h-screen"
+          className={`relative bg-white shrink-0 transition-[width] duration-200 ${
+            activeViewport === "mobile"
+              ? "rounded-[28px] p-2 shadow-2xl border border-zinc-300 mb-12"
+              : activeViewport === "tablet"
+              ? "rounded-2xl shadow-xl p-1.5 border border-zinc-300 mb-12"
+              : "border border-zinc-300 shadow-sm mb-16"
           }`}
+          style={{
+            width,
+            minHeight: activeViewport === "mobile" ? "760px" : "900px",
+          }}
+          onClick={(e) => e.stopPropagation()}
         >
-          {children}
-        </div>
-
-        {/* Bottom Home Indicator for Mobile */}
-        {isMobile && (
-          <div className="w-full h-4 bg-zinc-800 flex items-center justify-center shrink-0 select-none">
-            <div className="w-24 h-1 bg-zinc-600 rounded-full" />
+          {activeViewport !== "desktop" && (
+            <div className="h-6 flex items-center justify-center text-[10px] font-mono text-zinc-400 select-none border-b border-zinc-100 mb-1">
+              {activeViewport === "mobile" ? "Mobile · 375px" : "Tablet · 768px"}
+            </div>
+          )}
+          <div
+            className="canvas-frame relative bg-white"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) onClearSelection();
+              onCanvasClick?.(e);
+            }}
+          >
+            {children}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

@@ -1,436 +1,532 @@
-import React from "react";
-import type {
-  ElementNode,
-  TemplateModel,
-  Viewport,
-  ElementStyleProps,
-  EditCommand,
-  ValidationError,
-} from "../lib/types";
-import { resolveElementProps } from "../lib/resolver";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import type { EditCommand, ElementNode, ElementStyleProps, TemplateModel, Viewport } from "../lib/types";
+import { isPropertyOverridden } from "../lib/resolver";
 
-export interface InspectorProps {
+interface Props {
   model: TemplateModel;
-  selectedNode: ElementNode | null;
+  selectedNodes: ElementNode[];
   activeViewport: Viewport;
-  onCommitCommand: (command: EditCommand) => { success: boolean; error?: ValidationError };
+  onCommitCommand: (command: EditCommand) => { success: boolean; error?: { message: string } };
 }
 
-export const Inspector: React.FC<InspectorProps> = ({
+const labelMap: Record<string, string> = {
+  fontFamily: "Font Family",
+  fontSize: "Size",
+  fontWeight: "Weight",
+  lineHeight: "Line Height",
+  letterSpacing: "Tracking",
+  textAlign: "Align",
+  color: "Text Color",
+  backgroundColor: "Background",
+  paddingTop: "Top",
+  paddingBottom: "Bottom",
+  paddingLeft: "Left",
+  paddingRight: "Right",
+  marginTop: "Top",
+  marginBottom: "Bottom",
+  width: "Width",
+  height: "Height",
+  borderRadius: "Radius",
+  borderWidth: "Border",
+  borderColor: "Border Color",
+  opacity: "Opacity",
+  display: "Display",
+  flexDirection: "Direction",
+  gap: "Gap",
+  alignItems: "Align Items",
+  justifyContent: "Justify",
+};
+
+const common = new Set<keyof ElementStyleProps>([
+  "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textAlign",
+  "color", "backgroundColor", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight",
+  "marginTop", "marginBottom", "width", "height", "borderRadius", "borderWidth", "borderColor",
+  "opacity", "display", "flexDirection", "gap", "alignItems", "justifyContent",
+]);
+
+function allowed(kind: ElementNode["kind"], key: keyof ElementStyleProps) {
+  if (kind === "text" || kind === "link") {
+    return new Set([
+      "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textAlign",
+      "color", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "marginTop",
+      "marginBottom", "opacity", "display",
+    ]).has(key as string);
+  }
+  if (kind === "button") return common.has(key);
+  if (kind === "image") {
+    return new Set([
+      "width", "height", "borderRadius", "borderWidth", "borderColor", "marginTop",
+      "marginBottom", "opacity", "display",
+    ]).has(key);
+  }
+  return common.has(key);
+}
+
+const SWATCH_PALETTE = [
+  { label: "Dark", value: "#18181B" },
+  { label: "Zinc", value: "#3F3F46" },
+  { label: "Muted", value: "#71717A" },
+  { label: "White", value: "#FFFFFF" },
+  { label: "Cream", value: "#FAF9F6" },
+  { label: "Surface", value: "#F4F4F5" },
+  { label: "Accent", value: "#2563EB" },
+  { label: "Emerald", value: "#059669" },
+];
+
+interface ColorControlProps {
+  label: string;
+  value: string;
+  overridden: boolean;
+  mixed: boolean;
+  onReset: () => void;
+  onChange: (val: string) => void;
+}
+
+const ColorControl: React.FC<ColorControlProps> = ({
+  label,
+  value,
+  overridden,
+  mixed,
+  onReset,
+  onChange,
+}) => {
+  const [textVal, setTextVal] = useState(value || "#000000");
+  const colorInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setTextVal(value || "#000000");
+  }, [value]);
+
+  const handleHexChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let input = e.target.value.trim();
+    if (!input.startsWith("#") && /^[0-9a-fA-F]+$/.test(input)) {
+      input = "#" + input;
+    }
+    setTextVal(input);
+    if (/^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(input)) {
+      onChange(input.toUpperCase());
+    }
+  };
+
+  const handleHexBlur = () => {
+    if (/^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(textVal)) {
+      onChange(textVal.toUpperCase());
+    } else {
+      setTextVal(value || "#000000");
+    }
+  };
+
+  const activeColor = value || "#000000";
+
+  return (
+    <div className="bg-white rounded-lg border border-zinc-200 p-2.5 shadow-sm space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-[11px] font-semibold text-zinc-700 flex items-center gap-1.5">
+          {label}
+          {overridden && (
+            <button
+              type="button"
+              onClick={onReset}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors"
+              title="Reset viewport override"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+              Reset
+            </button>
+          )}
+        </label>
+        {mixed && <span className="text-[10px] text-zinc-400 font-medium">Mixed</span>}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => colorInputRef.current?.click()}
+          className="relative w-8 h-8 rounded-md border border-zinc-300 shadow-inner shrink-0 overflow-hidden group focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+          style={{ backgroundColor: activeColor }}
+          title="Click to open color picker"
+        >
+          <input
+            ref={colorInputRef}
+            type="color"
+            value={activeColor.length === 7 ? activeColor : "#000000"}
+            onChange={(e) => {
+              const hex = e.target.value.toUpperCase();
+              setTextVal(hex);
+              onChange(hex);
+            }}
+            className="absolute -top-4 -left-4 w-16 h-16 opacity-0 cursor-pointer pointer-events-auto"
+          />
+        </button>
+
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={textVal}
+            onChange={handleHexChange}
+            onBlur={handleHexBlur}
+            onKeyDown={(e) => e.key === "Enter" && (e.currentTarget as HTMLInputElement).blur()}
+            placeholder="#000000"
+            className="w-full h-8 px-2.5 font-mono text-xs text-zinc-800 rounded-md border border-zinc-200 bg-zinc-50/50 hover:bg-white focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none uppercase tracking-wider transition-colors"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1.5 pt-0.5">
+        {SWATCH_PALETTE.map((swatch) => (
+          <button
+            key={swatch.value}
+            type="button"
+            onClick={() => {
+              setTextVal(swatch.value);
+              onChange(swatch.value);
+            }}
+            title={`${swatch.label} (${swatch.value})`}
+            className={`w-4 h-4 rounded-full border transition-transform hover:scale-125 focus:outline-none ${
+              activeColor.toUpperCase() === swatch.value.toUpperCase()
+                ? "border-blue-600 ring-2 ring-blue-400 ring-offset-1 scale-110"
+                : "border-zinc-300 hover:border-zinc-500"
+            }`}
+            style={{ backgroundColor: swatch.value }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export const Inspector: React.FC<Props> = ({
   model,
-  selectedNode,
+  selectedNodes,
   activeViewport,
   onCommitCommand,
 }) => {
-  if (!selectedNode) {
+  const node = selectedNodes[0];
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setDrafts({});
+  }, [node?.id, activeViewport]);
+
+  const scope: "all" | "tablet" | "mobile" =
+    activeViewport === "desktop" ? "all" : activeViewport;
+
+  const getValue = (n: ElementNode, key: keyof ElementStyleProps): unknown =>
+    (scope === "all" ? n.baseProps[key] : n.overrides[scope as "tablet" | "mobile"]?.[key]) ??
+    n.baseProps[key];
+
+  const mixed = (key: keyof ElementStyleProps) =>
+    selectedNodes.some((n) => getValue(n, key) !== getValue(selectedNodes[0], key));
+
+  const commit = (key: keyof ElementStyleProps, value: unknown) => {
+    const patches: Record<string, { styleProps: Partial<ElementStyleProps> }> = {};
+    selectedNodes.forEach((n) => {
+      if (allowed(n.kind, key)) {
+        patches[n.id] = {
+          styleProps: { [key]: value } as Partial<ElementStyleProps>,
+        };
+      }
+    });
+    const ids = Object.keys(patches);
+    if (!ids.length) return;
+    const command: EditCommand = {
+      commandId: `inspector-${model.revision}-${ids.join("-")}-${String(key)}`,
+      source: "inspector",
+      targetIds: ids,
+      scope,
+      baseRevision: model.revision,
+      changes: { patches },
+      metadata: { description: `Inspector: ${labelMap[key] ?? String(key)}` },
+    };
+    onCommitCommand(command);
+    setDrafts((d) => {
+      const next = { ...d };
+      delete next[String(key)];
+      return next;
+    });
+  };
+
+  const reset = (key: keyof ElementStyleProps) => commit(key, undefined);
+
+  const fields = useMemo(() => {
+    if (!node) return [];
+    const allKeys = [
+      "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textAlign",
+      "color", "backgroundColor", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight",
+      "marginTop", "marginBottom", "width", "height", "borderRadius", "borderWidth", "borderColor",
+      "opacity", "display", "flexDirection", "gap", "alignItems", "justifyContent",
+    ] as (keyof ElementStyleProps)[];
+    return allKeys.filter((k) => selectedNodes.every((n) => allowed(n.kind, k)));
+  }, [node, selectedNodes]);
+
+  if (!node) {
     return (
-      <aside className="w-80 bg-zinc-950 border-l border-zinc-800/80 p-6 flex flex-col justify-center items-center text-center select-none font-sans text-zinc-400">
-        <div className="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 mb-3 font-mono text-sm">
-          --
+      <aside className="w-[300px] shrink-0 border-l border-zinc-200 bg-[#fbfbfa] p-5 text-zinc-400">
+        <div className="text-[11px] tracking-[0.16em] uppercase font-semibold text-zinc-500">
+          Inspector
         </div>
-        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-300 mb-1">
-          No Element Selected
-        </div>
-        <div className="text-[11px] text-zinc-500 max-w-[200px]">
-          Select any element on the visual canvas to inspect and adjust its properties.
+        <div className="mt-16 text-center text-xs text-zinc-400">
+          Select an element on canvas or layers panel to edit properties.
         </div>
       </aside>
     );
   }
 
-  // Resolve current computed props for display
-  const resolvedProps = resolveElementProps(selectedNode, activeViewport);
+  const colorFields = fields.filter((k) => k === "color" || k === "backgroundColor" || k === "borderColor");
+  const typographyFields = fields.filter((k) =>
+    ["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textAlign"].includes(k)
+  );
+  const layoutAndSizingFields = fields.filter((k) =>
+    ["width", "height", "display", "flexDirection", "gap", "alignItems", "justifyContent", "borderRadius", "borderWidth", "opacity"].includes(k)
+  );
+  const paddingFields = fields.filter((k) => k.startsWith("padding"));
+  const marginFields = fields.filter((k) => k.startsWith("margin"));
 
-  // Check if a specific property is overridden on the active viewport
-  const isOverridden = (propKey: keyof ElementStyleProps): boolean => {
-    if (activeViewport === "desktop") return false;
-    return selectedNode.overrides[activeViewport]?.[propKey] !== undefined;
-  };
+  const renderSingleField = (key: keyof ElementStyleProps) => {
+    const value = mixed(key) ? "" : getValue(node, key);
+    const overridden =
+      activeViewport !== "desktop" &&
+      selectedNodes.length === 1 &&
+      isPropertyOverridden(node, activeViewport, key);
+    const draft = drafts[String(key)] ?? (value === undefined ? "" : String(value));
 
-  // Helper to commit a property change
-  const handlePropertyChange = (
-    propKey: keyof ElementStyleProps,
-    value: string | number | undefined
-  ) => {
-    const scope = activeViewport === "desktop" ? "all" : activeViewport;
+    if (key === "color" || key === "backgroundColor" || key === "borderColor") {
+      return (
+        <ColorControl
+          key={String(key)}
+          label={labelMap[key] ?? String(key)}
+          value={draft}
+          overridden={overridden}
+          mixed={mixed(key)}
+          onReset={() => reset(key)}
+          onChange={(hex) => commit(key, hex)}
+        />
+      );
+    }
 
-    const command: EditCommand = {
-      commandId: `cmd_inspect_${Date.now()}`,
-      source: "inspector",
-      targetIds: [selectedNode.id],
-      scope,
-      baseRevision: model.revision,
-      changes: {
-        patches: {
-          [selectedNode.id]: {
-            styleProps: {
-              [propKey]: value,
-            },
-          },
-        },
-      },
-      metadata: {
-        description: `Set ${propKey} on ${selectedNode.name} (${activeViewport})`,
-      },
-    };
+    const isSelect =
+      key === "fontWeight" ||
+      key === "display" ||
+      key === "flexDirection" ||
+      key === "textAlign" ||
+      key === "alignItems" ||
+      key === "justifyContent" ||
+      key === "fontFamily";
 
-    onCommitCommand(command);
-  };
+    const hasSlider = ["fontSize", "borderRadius", "gap", "opacity"].includes(key);
 
-  // Helper to reset a specific property override on the active viewport
-  const handleResetOverride = (propKey: keyof ElementStyleProps) => {
-    if (activeViewport === "desktop") return;
-
-    const command: EditCommand = {
-      commandId: `cmd_reset_override_${Date.now()}`,
-      source: "inspector",
-      targetIds: [selectedNode.id],
-      scope: activeViewport,
-      baseRevision: model.revision,
-      changes: {
-        patches: {
-          [selectedNode.id]: {
-            styleProps: {
-              [propKey]: undefined, // Explicit override deletion
-            },
-          },
-        },
-      },
-      metadata: {
-        description: `Reset ${propKey} override on ${selectedNode.name} (${activeViewport})`,
-      },
-    };
-
-    onCommitCommand(command);
-  };
-
-  const isTextElement = selectedNode.kind === "text" || selectedNode.kind === "button" || selectedNode.kind === "link";
-  const isContainerElement = selectedNode.kind === "container" || selectedNode.kind === "section" || selectedNode.kind === "card";
-
-  return (
-    <aside className="w-80 bg-zinc-950 border-l border-zinc-800/80 flex flex-col h-full overflow-y-auto select-none font-sans text-zinc-100 divide-y divide-zinc-850">
-      {/* Element Header */}
-      <div className="p-4 bg-zinc-950/60 shrink-0">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-xs font-bold uppercase tracking-wider text-zinc-200">
-            {selectedNode.name}
-          </span>
-          <span className="px-2 py-0.5 rounded text-[10px] font-mono lowercase bg-zinc-900 border border-zinc-800 text-zinc-400">
-            {selectedNode.kind}
-          </span>
+    return (
+      <div key={String(key)} className="space-y-1">
+        <div className="flex items-center justify-between">
+          <label className="text-[11px] font-medium text-zinc-600 flex items-center gap-1.5">
+            {labelMap[key] ?? String(key)}
+            {overridden && (
+              <button
+                type="button"
+                onClick={() => reset(key)}
+                className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-medium bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors"
+                title="Reset override"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                Reset
+              </button>
+            )}
+          </label>
+          {mixed(key) && <span className="text-[10px] text-zinc-400">Mixed</span>}
         </div>
 
-        {/* Viewport Scope Status Banner */}
-        <div className="mt-2 px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-between text-[11px]">
-          <span className="text-zinc-400">Scope</span>
-          <span className="font-mono text-[10px] text-zinc-300 font-medium">
-            {activeViewport === "desktop" ? "Base Styles (All Views)" : `${activeViewport.toUpperCase()} Override`}
-          </span>
-        </div>
-      </div>
-
-      {/* Group 1: Typography (text, button, link) */}
-      {isTextElement && (
-        <div className="p-4 space-y-3.5">
-          <div className="text-[11px] font-mono font-semibold uppercase tracking-wider text-zinc-400">
-            Typography
-          </div>
-
-          {/* Font Size */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <label className="text-zinc-400 flex items-center gap-1.5">
-                <span>Font Size</span>
-                {isOverridden("fontSize") && (
-                  <button
-                    type="button"
-                    onClick={() => handleResetOverride("fontSize")}
-                    className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                    title="Active Viewport Override. Click to Reset."
-                  />
-                )}
-              </label>
-              <span className="font-mono text-zinc-300 text-[11px]">
-                {resolvedProps.fontSize || 16}px
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min="10"
-                max="96"
-                value={resolvedProps.fontSize || 16}
-                onChange={(e) => handlePropertyChange("fontSize", Number(e.target.value))}
-                className="w-full accent-blue-600 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
-              />
-            </div>
-          </div>
-
-          {/* Font Weight */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <label className="text-zinc-400 flex items-center gap-1.5">
-                <span>Font Weight</span>
-                {isOverridden("fontWeight") && (
-                  <button
-                    type="button"
-                    onClick={() => handleResetOverride("fontWeight")}
-                    className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                    title="Active Viewport Override. Click to Reset."
-                  />
-                )}
-              </label>
-            </div>
-            <select
-              value={resolvedProps.fontWeight || 400}
-              onChange={(e) => handlePropertyChange("fontWeight", Number(e.target.value))}
-              className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
-            >
-              <option value={400}>400 - Normal</option>
-              <option value={500}>500 - Medium</option>
-              <option value={600}>600 - SemiBold</option>
-              <option value={700}>700 - Bold</option>
-              <option value={800}>800 - ExtraBold</option>
-            </select>
-          </div>
-
-          {/* Text Align */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <label className="text-zinc-400 flex items-center gap-1.5">
-                <span>Text Align</span>
-                {isOverridden("textAlign") && (
-                  <button
-                    type="button"
-                    onClick={() => handleResetOverride("textAlign")}
-                    className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                    title="Active Viewport Override. Click to Reset."
-                  />
-                )}
-              </label>
-            </div>
-            <div className="grid grid-cols-3 gap-1 bg-zinc-900 p-0.5 rounded-lg border border-zinc-800 text-xs">
-              {(["left", "center", "right"] as const).map((align) => (
-                <button
-                  key={align}
-                  type="button"
-                  onClick={() => handlePropertyChange("textAlign", align)}
-                  className={`py-1 rounded capitalize font-medium transition-colors ${
-                    resolvedProps.textAlign === align
-                      ? "bg-zinc-800 text-zinc-100"
-                      : "text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  {align}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Text Color */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <label className="text-zinc-400 flex items-center gap-1.5">
-                <span>Text Color</span>
-                {isOverridden("color") && (
-                  <button
-                    type="button"
-                    onClick={() => handleResetOverride("color")}
-                    className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                    title="Active Viewport Override. Click to Reset."
-                  />
-                )}
-              </label>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={resolvedProps.color || "#18181B"}
-                onChange={(e) => handlePropertyChange("color", e.target.value)}
-                className="w-7 h-7 rounded border border-zinc-800 bg-transparent cursor-pointer"
-              />
-              <input
-                type="text"
-                value={resolvedProps.color || "#18181B"}
-                onChange={(e) => handlePropertyChange("color", e.target.value)}
-                className="flex-1 px-2.5 py-1 rounded bg-zinc-900 border border-zinc-800 text-xs font-mono text-zinc-200"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Group 2: Flex Layout (containers, sections, cards) */}
-      {isContainerElement && (
-        <div className="p-4 space-y-3.5">
-          <div className="text-[11px] font-mono font-semibold uppercase tracking-wider text-zinc-400">
-            Flex Layout
-          </div>
-
-          {/* Direction */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <label className="text-zinc-400 flex items-center gap-1.5">
-                <span>Direction</span>
-                {isOverridden("flexDirection") && (
-                  <button
-                    type="button"
-                    onClick={() => handleResetOverride("flexDirection")}
-                    className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                    title="Active Viewport Override. Click to Reset."
-                  />
-                )}
-              </label>
-            </div>
-            <div className="grid grid-cols-2 gap-1 bg-zinc-900 p-0.5 rounded-lg border border-zinc-800 text-xs">
-              {(["row", "column"] as const).map((dir) => (
-                <button
-                  key={dir}
-                  type="button"
-                  onClick={() => handlePropertyChange("flexDirection", dir)}
-                  className={`py-1 rounded capitalize font-medium transition-colors ${
-                    resolvedProps.flexDirection === dir
-                      ? "bg-zinc-800 text-zinc-100"
-                      : "text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  {dir}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Gap */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <label className="text-zinc-400 flex items-center gap-1.5">
-                <span>Gap</span>
-                {isOverridden("gap") && (
-                  <button
-                    type="button"
-                    onClick={() => handleResetOverride("gap")}
-                    className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                    title="Active Viewport Override. Click to Reset."
-                  />
-                )}
-              </label>
-              <span className="font-mono text-zinc-300 text-[11px]">
-                {resolvedProps.gap || 0}px
-              </span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="64"
-              value={resolvedProps.gap || 0}
-              onChange={(e) => handlePropertyChange("gap", Number(e.target.value))}
-              className="w-full accent-blue-600 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Group 3: Spacing & Dimensions (All Elements) */}
-      <div className="p-4 space-y-3.5">
-        <div className="text-[11px] font-mono font-semibold uppercase tracking-wider text-zinc-400">
-          Spacing & Radius
-        </div>
-
-        {/* Padding */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-xs">
-            <label className="text-zinc-400 flex items-center gap-1.5">
-              <span>Padding (Top / Bottom)</span>
-              {(isOverridden("paddingTop") || isOverridden("paddingBottom")) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleResetOverride("paddingTop");
-                    handleResetOverride("paddingBottom");
-                  }}
-                  className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                  title="Active Viewport Override. Click to Reset."
-                />
-              )}
-            </label>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              type="number"
-              value={resolvedProps.paddingTop ?? 0}
-              onChange={(e) => handlePropertyChange("paddingTop", Number(e.target.value))}
-              placeholder="Top"
-              className="px-2 py-1 rounded bg-zinc-900 border border-zinc-800 text-xs font-mono text-zinc-200"
-            />
-            <input
-              type="number"
-              value={resolvedProps.paddingBottom ?? 0}
-              onChange={(e) => handlePropertyChange("paddingBottom", Number(e.target.value))}
-              placeholder="Bottom"
-              className="px-2 py-1 rounded bg-zinc-900 border border-zinc-800 text-xs font-mono text-zinc-200"
-            />
-          </div>
-        </div>
-
-        {/* Border Radius */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-xs">
-            <label className="text-zinc-400 flex items-center gap-1.5">
-              <span>Corner Radius</span>
-              {isOverridden("borderRadius") && (
-                <button
-                  type="button"
-                  onClick={() => handleResetOverride("borderRadius")}
-                  className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                  title="Active Viewport Override. Click to Reset."
-                />
-              )}
-            </label>
-            <span className="font-mono text-zinc-300 text-[11px]">
-              {resolvedProps.borderRadius || 0}px
-            </span>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="32"
-            value={resolvedProps.borderRadius || 0}
-            onChange={(e) => handlePropertyChange("borderRadius", Number(e.target.value))}
-            className="w-full accent-blue-600 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
-          />
-        </div>
-
-        {/* Background Color */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-xs">
-            <label className="text-zinc-400 flex items-center gap-1.5">
-              <span>Background</span>
-              {isOverridden("backgroundColor") && (
-                <button
-                  type="button"
-                  onClick={() => handleResetOverride("backgroundColor")}
-                  className="w-2 h-2 rounded-full bg-amber-400 hover:scale-125 transition-transform"
-                  title="Active Viewport Override. Click to Reset."
-                />
-              )}
-            </label>
-          </div>
+        {isSelect ? (
+          <select
+            value={draft}
+            onChange={(e) => commit(key, isNaN(Number(e.target.value)) ? e.target.value : Number(e.target.value))}
+            className="w-full h-8 px-2.5 rounded-md border border-zinc-200 bg-white text-xs text-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none shadow-sm transition-colors"
+          >
+            {key === "fontFamily"
+              ? ["Inter", "system-ui", "monospace"].map((x) => <option key={x}>{x}</option>)
+              : key === "fontWeight"
+              ? [300, 400, 500, 600, 700, 800].map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))
+              : key === "display"
+              ? ["block", "flex", "grid", "none"].map((x) => <option key={x}>{x}</option>)
+              : key === "flexDirection"
+              ? ["row", "column"].map((x) => <option key={x}>{x}</option>)
+              : key === "textAlign"
+              ? ["left", "center", "right", "justify"].map((x) => <option key={x}>{x}</option>)
+              : key === "alignItems"
+              ? ["flex-start", "center", "flex-end", "stretch"].map((x) => <option key={x}>{x}</option>)
+              : ["flex-start", "center", "flex-end", "space-between"].map((x) => <option key={x}>{x}</option>)}
+          </select>
+        ) : (
           <div className="flex items-center gap-2">
             <input
-              type="color"
-              value={resolvedProps.backgroundColor || "#FFFFFF"}
-              onChange={(e) => handlePropertyChange("backgroundColor", e.target.value)}
-              className="w-7 h-7 rounded border border-zinc-800 bg-transparent cursor-pointer"
-            />
-            <input
               type="text"
-              value={resolvedProps.backgroundColor || ""}
-              placeholder="transparent"
-              onChange={(e) => handlePropertyChange("backgroundColor", e.target.value || undefined)}
-              className="flex-1 px-2.5 py-1 rounded bg-zinc-900 border border-zinc-800 text-xs font-mono text-zinc-200"
+              value={draft}
+              onChange={(e) => setDrafts((d) => ({ ...d, [String(key)]: e.target.value }))}
+              onBlur={() => {
+                if (key === "width" && (draft === "auto" || draft === "100%")) {
+                  commit(key, draft);
+                  return;
+                }
+                const numeric = [
+                  "fontSize", "lineHeight", "letterSpacing", "paddingTop", "paddingBottom",
+                  "paddingLeft", "paddingRight", "marginTop", "marginBottom", "width", "height",
+                  "borderRadius", "borderWidth", "opacity", "gap", "fontWeight",
+                ].includes(key);
+                if (numeric) {
+                  if (draft.trim() === "") return;
+                  const numberValue = Number(draft);
+                  if (!Number.isFinite(numberValue)) return;
+                  commit(key, numberValue);
+                } else {
+                  commit(key, draft);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+              }}
+              className="flex-1 min-w-0 h-8 px-2.5 rounded-md border border-zinc-200 bg-white text-xs text-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none shadow-sm transition-colors"
             />
+            {hasSlider && (
+              <input
+                type="range"
+                min={key === "opacity" ? 0 : 0}
+                max={key === "opacity" ? 1 : key === "fontSize" ? 120 : key === "borderRadius" ? 64 : 64}
+                step={key === "opacity" ? 0.01 : 1}
+                value={Number(draft) || 0}
+                onChange={(e) => setDrafts((d) => ({ ...d, [String(key)]: e.target.value }))}
+                onMouseUp={(e) => commit(key, Number(e.currentTarget.value))}
+                className="w-20 shrink-0 accent-zinc-800"
+              />
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderDirectionalBox = (title: string, groupKeys: (keyof ElementStyleProps)[]) => {
+    return (
+      <div className="bg-white rounded-lg border border-zinc-200 p-2.5 shadow-sm space-y-2">
+        <div className="text-[11px] font-semibold text-zinc-700">
+          {title}
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {groupKeys.map((key) => {
+            const value = mixed(key) ? "" : getValue(node, key);
+            const overridden =
+              activeViewport !== "desktop" &&
+              selectedNodes.length === 1 &&
+              isPropertyOverridden(node, activeViewport, key);
+            const draft = drafts[String(key)] ?? (value === undefined ? "" : String(value));
+
+            return (
+              <div key={String(key)} className="space-y-1">
+                <div className="flex items-center justify-between text-[10px] text-zinc-500 font-medium">
+                  <span>{labelMap[key]}</span>
+                  {overridden && (
+                    <button
+                      type="button"
+                      onClick={() => reset(key)}
+                      className="text-amber-600 font-bold"
+                      title="Reset"
+                    >
+                      ●
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={draft}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [String(key)]: e.target.value }))}
+                    onBlur={() => {
+                      if (draft.trim() === "") return;
+                      const num = Number(draft);
+                      if (Number.isFinite(num)) commit(key, num);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && (e.currentTarget as HTMLInputElement).blur()}
+                    className="w-full h-7 px-2 pr-6 rounded border border-zinc-200 bg-zinc-50/50 hover:bg-white focus:bg-white text-xs text-zinc-800 focus:border-blue-500 focus:outline-none transition-colors"
+                  />
+                  <span className="absolute right-2 top-1.5 text-[10px] text-zinc-400 font-mono pointer-events-none select-none">
+                    px
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <aside className="w-[300px] shrink-0 border-l border-zinc-200 bg-[#fbfbfa] text-zinc-900 flex flex-col h-full overflow-hidden">
+      {/* Header */}
+      <div className="h-11 px-4 border-b border-zinc-200 flex items-center justify-between shrink-0 bg-white/60 backdrop-blur-sm">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.14em] font-bold text-zinc-400">
+            Inspector
+          </div>
+          <div className="text-xs font-semibold text-zinc-800 mt-0.5 truncate max-w-[170px]">
+            {selectedNodes.length > 1 ? `${selectedNodes.length} elements selected` : node.name}
           </div>
         </div>
+        <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200">
+          {activeViewport}
+        </span>
+      </div>
+
+      {/* Scrollable Fields Body */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar">
+        {selectedNodes.length > 1 && (
+          <div className="text-[10px] text-zinc-500 border border-zinc-200 bg-white rounded-md px-2.5 py-2">
+            Changes apply to properties shared by all selected elements.
+          </div>
+        )}
+
+        {/* Color Controls */}
+        {colorFields.length > 0 && (
+          <div className="space-y-2.5">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 px-0.5">
+              Colors & Surface
+            </div>
+            {colorFields.map(renderSingleField)}
+          </div>
+        )}
+
+        {/* Typography */}
+        {typographyFields.length > 0 && (
+          <div className="space-y-2.5 pt-2 border-t border-zinc-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 px-0.5">
+              Typography
+            </div>
+            {typographyFields.map(renderSingleField)}
+          </div>
+        )}
+
+        {/* Layout & Appearance */}
+        {layoutAndSizingFields.length > 0 && (
+          <div className="space-y-2.5 pt-2 border-t border-zinc-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 px-0.5">
+              Layout & Appearance
+            </div>
+            {layoutAndSizingFields.map(renderSingleField)}
+          </div>
+        )}
+
+        {/* Spacing (Padding & Margin) */}
+        {(paddingFields.length > 0 || marginFields.length > 0) && (
+          <div className="space-y-2.5 pt-2 border-t border-zinc-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 px-0.5">
+              Spacing & Box Model
+            </div>
+            {paddingFields.length > 0 && renderDirectionalBox("Padding", paddingFields)}
+            {marginFields.length > 0 && renderDirectionalBox("Margin", marginFields)}
+          </div>
+        )}
       </div>
     </aside>
   );
