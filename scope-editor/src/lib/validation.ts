@@ -47,7 +47,7 @@ export const EditCommandSchema = z.object({
 }).strict();
 
 const COMMON_TEXT = ["fontFamily", "fontWeight", "fontSize", "lineHeight", "letterSpacing", "textAlign", "color", "marginTop", "marginBottom", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "opacity", "display"] as const;
-const LAYOUT = ["display", "flexDirection", "gap", "alignItems", "justifyContent", "backgroundColor", "borderRadius", "borderWidth", "borderColor", "marginTop", "marginBottom", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "width", "height", "opacity", "textAlign"] as const;
+const LAYOUT = ["display", "flexDirection", "gap", "alignItems", "justifyContent", "backgroundColor", "borderRadius", "borderWidth", "borderColor", "marginTop", "marginBottom", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "width", "height", "opacity", "textAlign", "fontFamily", "fontWeight", "fontSize", "color"] as const;
 const BUTTON = [...COMMON_TEXT, "backgroundColor", "borderRadius", "borderWidth", "borderColor", "width", "height"] as const;
 const IMAGE = ["width", "height", "borderRadius", "borderWidth", "borderColor", "marginTop", "marginBottom", "opacity", "display"] as const;
 
