@@ -1,0 +1,11 @@
+{
+  "name": "build-the-scoped-ai-template-editor",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Scoped AI Template Editor (Scope Studio)",
+  "scripts": {
+    "dev": "npm --prefix scope-editor run dev",
+    "build": "npm --prefix scope-editor run build",
+    "test": "npm --prefix scope-editor run test"
+  }
+}
