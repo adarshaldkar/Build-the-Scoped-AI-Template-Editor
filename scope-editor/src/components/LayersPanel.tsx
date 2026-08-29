@@ -8,17 +8,6 @@ interface LayersPanelProps {
   onSelect: (id: string, additive: boolean) => void;
 }
 
-const kindBadges: Record<string, { label: string; color: string }> = {
-  section: { label: "SEC", color: "bg-purple-50 text-purple-700 border-purple-200" },
-  container: { label: "DIV", color: "bg-zinc-100 text-zinc-600 border-zinc-200" },
-  card: { label: "CRD", color: "bg-zinc-100 text-zinc-600 border-zinc-200" },
-  button: { label: "BTN", color: "bg-blue-50 text-blue-700 border-blue-200" },
-  text: { label: "TXT", color: "bg-amber-50 text-amber-700 border-amber-200" },
-  link: { label: "LNK", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  image: { label: "IMG", color: "bg-rose-50 text-rose-700 border-rose-200" },
-  input: { label: "INP", color: "bg-cyan-50 text-cyan-700 border-cyan-200" },
-};
-
 export const LayersPanel: React.FC<LayersPanelProps> = ({
   model,
   selectedIds,
@@ -40,15 +29,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     const selected = selectedIds.includes(node.id);
     const hasChildren = Boolean(node.children?.length);
     const isCollapsed = collapsed.has(node.id);
-    const badge = kindBadges[node.kind] ?? {
-      label: node.kind.slice(0, 3).toUpperCase(),
-      color: "bg-zinc-100 text-zinc-600 border-zinc-200",
-    };
 
     return (
       <React.Fragment key={node.id}>
         <div
-          className={`group flex items-center gap-1.5 h-8 px-2.5 text-xs cursor-pointer select-none transition-colors ${
+          className={`group flex items-center gap-2 h-8 px-2.5 text-xs cursor-pointer select-none transition-colors ${
             selected
               ? "bg-blue-50/80 text-blue-900 font-semibold border-r-2 border-blue-600"
               : "text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900"
@@ -58,7 +43,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             e.stopPropagation();
             onSelect(node.id, e.shiftKey || e.metaKey || e.ctrlKey);
           }}
-          title={`${node.name} (${node.kind}) - Click to select`}
+          title={`${node.name} - Click to select`}
         >
           {/* Chevron expand/collapse button */}
           <button
@@ -73,18 +58,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
               <span className="text-[10px] font-bold leading-none">
                 {isCollapsed ? "›" : "⌄"}
               </span>
-            ) : null}
+            ) : (
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-300 opacity-40"></span>
+            )}
           </button>
 
-          {/* Kind Mini-Badge */}
-          <span
-            className={`px-1 py-0.2 rounded text-[8px] font-mono font-bold tracking-tight border shrink-0 ${badge.color}`}
-          >
-            {badge.label}
-          </span>
-
           {/* Node Name */}
-          <span className="truncate flex-1 text-[11px]">{node.name}</span>
+          <span className="truncate flex-1 text-[12px]">{node.name}</span>
         </div>
 
         {/* Recursive Children Tree */}
@@ -108,7 +88,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         {/* Dynamic Selection/Count Badge */}
         {selectedIds.length > 0 ? (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/80 animate-fade-in">
-            {selectedIds.length} {selectedIds.length === 1 ? "selected" : "selected"}
+            {selectedIds.length} selected
           </span>
         ) : (
           <span className="text-[10px] text-zinc-400 font-mono">

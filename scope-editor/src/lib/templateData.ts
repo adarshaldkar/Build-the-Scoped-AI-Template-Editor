@@ -120,11 +120,7 @@ const baseTemplateModel: TemplateModel = {
                 fontSize: 14,
                 color: "#3F3F46",
               },
-              overrides: {
-                mobile: {
-                  display: "none",
-                },
-              },
+              overrides: {},
             },
             {
               id: "nav-4",
@@ -139,11 +135,7 @@ const baseTemplateModel: TemplateModel = {
                 fontSize: 14,
                 color: "#3F3F46",
               },
-              overrides: {
-                mobile: {
-                  display: "none",
-                },
-              },
+              overrides: {},
             },
           ],
         },
