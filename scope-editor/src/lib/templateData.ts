@@ -33,10 +33,10 @@ const baseTemplateModel: TemplateModel = {
       },
       overrides: {
         mobile: {
-          paddingTop: 16,
-          paddingBottom: 16,
-          paddingLeft: 20,
-          paddingRight: 20,
+          paddingTop: 12,
+          paddingBottom: 12,
+          paddingLeft: 12,
+          paddingRight: 12,
         },
       },
       children: [
@@ -56,7 +56,7 @@ const baseTemplateModel: TemplateModel = {
           },
           overrides: {
             mobile: {
-              fontSize: 18,
+              fontSize: 16,
             },
           },
         },
@@ -73,7 +73,7 @@ const baseTemplateModel: TemplateModel = {
           },
           overrides: {
             mobile: {
-              gap: 12,
+              gap: 8,
             },
           },
           children: [
@@ -90,7 +90,11 @@ const baseTemplateModel: TemplateModel = {
                 fontSize: 14,
                 color: "#3F3F46",
               },
-              overrides: {},
+              overrides: {
+                mobile: {
+                  fontSize: 12,
+                },
+              },
             },
             {
               id: "nav-2",
@@ -105,7 +109,11 @@ const baseTemplateModel: TemplateModel = {
                 fontSize: 14,
                 color: "#3F3F46",
               },
-              overrides: {},
+              overrides: {
+                mobile: {
+                  fontSize: 12,
+                },
+              },
             },
             {
               id: "nav-3",
@@ -120,7 +128,11 @@ const baseTemplateModel: TemplateModel = {
                 fontSize: 14,
                 color: "#3F3F46",
               },
-              overrides: {},
+              overrides: {
+                mobile: {
+                  fontSize: 12,
+                },
+              },
             },
             {
               id: "nav-4",
@@ -135,7 +147,11 @@ const baseTemplateModel: TemplateModel = {
                 fontSize: 14,
                 color: "#3F3F46",
               },
-              overrides: {},
+              overrides: {
+                mobile: {
+                  fontSize: 12,
+                },
+              },
             },
           ],
         },
@@ -210,7 +226,7 @@ const baseTemplateModel: TemplateModel = {
             mobile: {
               fontSize: 34,
               lineHeight: 1.15,
-              marginBottom: 18,
+              marginBottom: 16,
             },
           },
         },
