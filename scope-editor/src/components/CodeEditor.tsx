@@ -168,11 +168,17 @@ export const CodeEditor: React.FC<Props> = ({
   const lineCount = Math.max(1, lines.length);
 
   const syncDraft = () => {
-    const code =
-      mode === "selected" && selectedNode
-        ? templateToMarkup(selectedNode, "selected")
-        : templateToMarkup(model, "full");
-    setDraft(code);
+    if (mode === "selected") {
+      if (selectedNode) {
+        setDraft(templateToMarkup(selectedNode, "selected"));
+      } else {
+        setDraft(
+          `<!-- No element is currently selected. -->\n<!-- Select an element on the canvas to view and edit its scoped component code, or switch to 'Full Template' mode above. -->`
+        );
+      }
+    } else {
+      setDraft(templateToMarkup(model, "full"));
+    }
     setDirty(false);
     setError(null);
   };
