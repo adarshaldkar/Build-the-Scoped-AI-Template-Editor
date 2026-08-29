@@ -1,59 +1,88 @@
-# Product Notes & Decision Rationale
+# Product Notes & System Contracts
 
-## 1. Primary User & Problem Statement
+## 1. Primary User, Job, and Safe Edit Definition
 
-**User**: A non-technical small-business owner or independent creator adapting a responsive website template.
-
-**Problem**: Traditional website builders are fragile and risky:
-- Making a change on mobile often silently breaks the desktop layout.
-- AI features in conventional tools act as "black box" code generators that blindly overwrite entire files or introduce breaking syntax errors.
-- Undoing a single unwanted change requires rolling back the entire document history, wiping out unrelated, hours-long manual edits.
-
-Scope eliminates these pain points through **deterministic transactional boundaries**, **strict viewport scope isolation**, and **per-element history recovery**.
-
----
-
-## 2. Safe Edit Definition & Core Contracts
-
-1. **Selection Authority**: Selection is represented as stable, immutable element IDs (`#hero`, `#hero-heading`, etc.). In `Selected` mode, AI proposals and code edits are strictly quarantined to the targeted IDs.
-2. **Deterministic Commit Pipeline**: All edits funnel through `executeCommit()`, which performs runtime Zod validation and business invariant checks before creating an immutable snapshot.
-3. **Pure Viewport Cascading**:
-   - `desktop` writes to `baseProps` (universal base styles).
-   - `tablet` writes to `overrides.tablet`.
-   - `mobile` writes to `overrides.mobile`.
-   - Modifying a mobile property never mutates or pollutes desktop styles.
-4. **Draft vs. Canonical Isolation**: AI output is strictly a `Proposal`, never an automatic overwrite. Proposals present before/after diffs with per-target `[Accept]` and `[Reject]` controls.
-5. **Non-Destructive Dual Recovery**:
-   - Linear session Undo/Redo (`⌘Z` / `⌘⇧Z`).
-   - Granular History Restore: Rolls back a single element's property state to any prior revision without reverting edits made to other sections.
+- **Primary User**: A small-business owner or independent creator adapting an existing website template without technical coding experience.
+- **Job-to-be-Done**: Make visual, structural, and copy changes across desktop, tablet, and mobile devices with confidence that changes on one screen size will not corrupt other screens, AI proposals will not hallucinate or overwrite unselected content, and any single element can be restored without losing unrelated work.
+- **Definition of a Safe Completed Template Edit**:
+  A template edit is safe and completed when:
+  1. It targets an explicit, authorized set of element IDs.
+  2. It contains only permitted, schema-validated property values.
+  3. It applies strictly to the intended viewport scope (`all`, `tablet`, or `mobile`).
+  4. It passes two-tier validation and increments the monotonic revision clock.
+  5. It appends an auditable, recoverable `RevisionEntry` to the history journal.
 
 ---
 
-## 3. One Product Decision of Our Own
+## 2. Core Entity Definitions & Boundaries
 
-### The User Problem
-In visual website editors, styling and spacing controls are often cramped or generic:
-1. Standard `<input type="color">` pickers look unstyled, lack design swatches, and don't provide quick copyable `#HEX` format validation.
-2. Padding and margin controls are frequently presented as a single unstructured list of inputs, making it easy for users to confuse Top/Bottom with Left/Right spacing.
-3. On narrow screens (laptops or mobile), sidebars permanently occupy valuable screen real estate, compressing the visual canvas.
+- **Element**: A modular, typed node (`ElementNode`) in the canonical tree, identified by a stable ID (`#nav`, `#hero`, `#hero-heading`), an element kind (`section`, `container`, `card`, `text`, `button`, `link`, `image`), a version integer, `baseProps`, and sparse `overrides`.
+- **Group Selection**: An immutable array of stable element IDs (`selectedIds: string[]`), established via click or additive `Shift`/`Ctrl`/`Cmd`-click. The selection is the sole authority for scoped inspector changes and AI proposals.
+- **Committed Step**: An atomic transaction executing through `executeCommit(model, command)`. If any part of a multi-target patch fails, the entire transaction is rejected and the revision is preserved.
+- **Viewport Scope**:
+  - `all` (Desktop): Writes universal styles directly to `node.baseProps`.
+  - `tablet`: Writes sparse override properties to `node.overrides.tablet`.
+  - `mobile`: Writes sparse override properties to `node.overrides.mobile`.
+- **Editable Property Boundary**: Property modifications are strictly constrained by the `ALLOWED_PROPERTIES_BY_KIND` matrix in `validation.ts` (e.g. typography applies to text/headings/buttons, box model applies to containers/sections, width/height/radius apply to images).
 
-### The Decision & Solution
-We engineered **Studio Focus Mode & Precision Surface Controls**:
+---
+
+## 3. Shared State & Responsive Cascade Resolution
+
+- **Unified Single Source of Truth**: The canvas, docked inspector, Monaco-style code editor, and AI assistant all read from and mutate the exact same `TemplateModel` state.
+- **Resolution Order**:
+  Computed styles are calculated dynamically at render time using `resolveElementProps(node, activeViewport)`:
+  $$\text{RenderedStyle} = \text{merge}(\text{node.baseProps}, \text{node.overrides}[\text{activeViewport}])$$
+- **Non-Destructive Override Removal**: Resetting an override deletes the specific key from `node.overrides[viewport]`, allowing clean inheritance from `baseProps` to resume immediately.
+
+---
+
+## 4. Deterministic AI Safety & Error Handling
+
+- **Selection Authority**: In `Selected` mode, candidate targets are strictly constrained to `selectedNodes`. Proposals cannot affect unselected elements.
+- **Deterministic Semantic Parsing**: Natural language prompts and contextual quick chips are mapped to typed property transforms with zero hallucinations or external API dependencies.
+- **Stale Proposal Guard**: Every proposal records `baseRevision`. If a manual edit increments the document revision while a proposal card is open, the proposal is marked `[STALE]` and applying it is safely blocked.
+- **Invalid Output Handling**: Any unrecognized instruction returns a clean non-destructive message: *"Could not determine valid stylistic changes for this prompt. Try specifying colors, sizes, weights, or using quick action chips."*
+
+---
+
+## 5. Review, Partial Acceptance & Granular Recovery Policy
+
+- **Draft vs. Canonical Isolation**: AI outputs and code editor drafts remain in isolated component state until explicit approval.
+- **Partial Acceptance**: Every diff in a multi-element proposal card features individual `[Accept]` and `[Reject]` buttons. The user can accept changes for button A while rejecting changes for button B; only accepted targets are passed to `buildAcceptedProposalCommand`.
+- **Independent Per-Element Recovery**:
+  - **Undo/Redo (`⌘Z` / `⌘⇧Z`)**: Session-level linear snapshot navigation.
+  - **History Restore Drawer (`⌘H`)**: Non-destructive, forward-only recovery. Users can select any historical revision of a specific element and restore its properties without rolling back subsequent edits to other sections.
+
+---
+
+## 6. One Additional Capability Chosen & Validation Evidence
+
+### The Capability: Studio Precision Controls & Focus Mode
 1. **Studio Color Picker with Hex Validation**: Clickable native swatch chips, formatted `#HEX` text inputs with auto-validation, and an 8-color curated studio palette (`#18181B`, `#3F3F46`, `#71717A`, `#FFFFFF`, `#FAF9F6`, `#F4F4F5`, `#2563EB`, `#059669`).
-2. **Directional Box Model Cards**: Structured, 2x2 directional cards for **Padding (px)** and **Margin (px)** with clear `Top`, `Bottom`, `Left`, and `Right` labels.
-3. **Collapsible Sidebar Toggles**: `⌘B` (Layers) and `⌘I` (Inspector) keyboard shortcuts and TopBar toggle buttons that smoothly collapse sidebars to grant a distraction-free, 100% full-width canvas workspace.
+2. **Directional Box Model Cards**: Dedicated 2x2 cards for **Padding (px)** and **Margin (px)** (`Top`, `Bottom`, `Left`, `Right`).
+3. **Collapsible Studio Toggles**: `⌘B` (Layers) and `⌘I` (Inspector) shortcuts and TopBar toggles for a distraction-free, 100% full-width canvas workspace.
 
-### How to Test Whether It Helped
-1. **Quantitative Usability Metrics**:
-   - **Task Completion Time**: Measure the time required for non-technical users to adjust top/bottom padding and change text colors (hypothesizing a 40% reduction in time due to grouped directional cards and swatches).
-   - **Error Rate**: Track invalid color inputs and accidental override regressions before vs. after implementing hex validation and explicit override reset badges.
-2. **Qualitative User Feedback**:
-   - Conduct moderated A/B testing with small-business owners asking them to customize the NOVA Studio landing page. Survey satisfaction on visual clarity, canvas focus, and control responsiveness.
+### Validation Evidence & Testing Strategy
+- **Quantitative Metrics**:
+  - **Task Completion Time**: Measure time taken to customize template theme colors and padding (target: 40% reduction vs. unstructured dropdowns).
+  - **Error Rate**: Measure invalid hex input submissions and accidental cross-viewport regressions (target: 0% due to validation and reset badges).
+- **Qualitative Validation**: Moderated usability tests with small-business owners evaluating visual clarity, canvas focus, and control responsiveness.
 
 ---
 
-## 4. Deliberate Scope Cuts
+## 7. Cuts, Assumptions & Priority Improvements
 
-- **No Remote AI API Dependency**: The AI assistant uses a deterministic local NLP parsing engine and typed scenario transforms, guaranteeing zero hallucinations, zero latency, and zero token costs.
-- **No Arbitrary Script Execution**: The Monaco-style code editor parses HTML/CSS into a safe AST reconciler without executing unsafe `<script>` tags or eval.
-- **No Freeform Absolute Drag Coordinates**: Elements follow semantic document flow (flexbox and box model) to ensure responsive adaptability across viewports.
+### Deliberate Scope Cuts
+1. **No Unsafe `<script>` Execution**: Code editor evaluates safe HTML/CSS AST reconciliations without executing dynamic JavaScript.
+2. **No Freeform Coordinate Dragging**: Elements adhere to responsive flexbox/box-model flow to prevent broken responsive layouts.
+3. **No External AI Latency/Cost**: Uses a fast, deterministic local NLP parser.
+
+### Assumptions
+- The assessment evaluates an offline, high-integrity studio prototype.
+- The `NOVA Studio` template serves as the canonical landing page template.
+
+### Next Three Improvements (In Priority Order)
+1. **Local Media Asset Manager**: Add an integrated asset library for uploading and swapping local images directly within the editor.
+2. **Drag-and-Drop Visual Reordering**: Visual drag handles in the Layers panel and on canvas for reordering sections and container children.
+3. **Multi-Page Template Support**: Extend `TemplateModel` schema to support multi-page site navigation with shared header/footer components.
